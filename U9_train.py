@@ -441,6 +441,8 @@ def make_env(
         energy_e0: float,
         energy_alpha: float,
         battery_return_threshold: float,
+
+
 ) -> gym.Env:
     env = ThreeObjectiveDroneDeliveryEnv(
         grid_size=16,
@@ -462,6 +464,7 @@ def make_env(
         energy_e0=energy_e0,
         energy_alpha=energy_alpha,
         battery_return_threshold=battery_return_threshold,
+        multi_objective_mode="fixed",
     )
 
     planner = MOPSOPlanner(
