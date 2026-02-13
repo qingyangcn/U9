@@ -76,6 +76,7 @@ class DailyTimeSystem:
 
         # 时间状态
         self.current_step = 0
+        self.step_in_day = 0  # Steps within current day for termination check
         self.current_hour = start_hour
         self.current_minute = 0
         self.day_number = 0
@@ -83,6 +84,7 @@ class DailyTimeSystem:
     def reset(self):
         """重置时间系统"""
         self.current_step = 0
+        self.step_in_day = 0
         self.current_hour = self.start_hour
         self.current_minute = 0
         self.day_number = 0
@@ -91,14 +93,17 @@ class DailyTimeSystem:
     def step(self):
         """前进一个时间步"""
         self.current_step += 1
-        self.current_minute += 60 // self.steps_per_hour
+        self.step_in_day += 1
+        
+        # Update hour and minute for display purposes
+        # Use precise calculation to avoid drift
+        minutes_from_start = self.step_in_day * (60.0 / self.steps_per_hour)
+        hours_from_start = int(minutes_from_start // 60)
+        self.current_hour = self.start_hour + hours_from_start
+        self.current_minute = int(minutes_from_start % 60)
 
-        if self.current_minute >= 60:
-            self.current_minute = 0
-            self.current_hour += 1
-
-        # 检查是否到达当天结束
-        if self.current_hour == self.end_hour and self.current_minute == 0:
+        # Check if day has ended using step count (robust and precise)
+        if self.step_in_day >= self.steps_per_day:
             self.day_number += 1
             return True  # 表示一天结束
 
