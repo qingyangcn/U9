@@ -483,7 +483,7 @@ def make_env(
 def train(args):
     try:
         from stable_baselines3 import PPO
-        from stable_baselines3.common.vec_env import DummyVecEnv
+        from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
         from stable_baselines3.common.callbacks import CheckpointCallback
     except ImportError as e:
         raise RuntimeError("Please install stable-baselines3: pip install stable-baselines3") from e
@@ -516,6 +516,7 @@ def train(args):
         )
 
     env = DummyVecEnv([env_fn])
+    env = VecMonitor(env)
 
     print("=" * 70)
     print("U8 PPO: Rule-based discrete actions (R=5); MOPSO assignment-only each step")
