@@ -1826,7 +1826,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         info['episode_r_vec'] = self.episode_r_vec.copy()  # <- 新增
         info['objective_weights'] = self.objective_weights.copy()
         info['scalar_reward'] = scalar_reward
-        info['episode'] = {
+        info['UAV_episode'] = {
             'r': scalar_reward,
             'l': self.time_system.current_step,
             'day_number': self.time_system.day_number,
@@ -4093,6 +4093,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         print(f"今日统计:")
         print(f"  生成订单: {self.daily_stats['orders_generated']}")
         print(f"  完成订单: {self.daily_stats['orders_completed']}")
+        print(f"  完成率: {self.daily_stats['orders_completed'] / self.daily_stats['orders_generated']:.2%}")
         print(f"  取消订单: {self.daily_stats['orders_cancelled']}")
         print(f"  准时交付: {self.daily_stats['on_time_deliveries']}")
 
