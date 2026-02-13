@@ -73,6 +73,7 @@ class DailyTimeSystem:
         self.steps_per_hour = steps_per_hour
         self.operating_hours = end_hour - start_hour
         self.steps_per_day = self.operating_hours * steps_per_hour
+        self.minutes_per_step = 60.0 / steps_per_hour  # Pre-compute for efficiency
 
         # 时间状态
         self.current_step = 0
@@ -97,7 +98,7 @@ class DailyTimeSystem:
         
         # Update hour and minute for display purposes
         # Use precise calculation to avoid drift
-        minutes_from_start = self.step_in_day * (60.0 / self.steps_per_hour)
+        minutes_from_start = self.step_in_day * self.minutes_per_step
         hours_from_start = int(minutes_from_start // 60)
         self.current_hour = self.start_hour + hours_from_start
         self.current_minute = int(minutes_from_start % 60)
