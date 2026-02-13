@@ -1119,7 +1119,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.drone_max_capacity = int(drone_max_capacity)
 
         self.distance_reward_weight = float(distance_reward_weight)
-        self.pending_distance_reward = 0.0
 
         self.top_k_merchants = int(top_k_merchants)
 
@@ -1164,7 +1163,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'obj0_total': 0.0,
             'obj0_completed': 0.0,
             'obj0_cancelled': 0.0,
-            'obj0_distance_efficiency': 0.0,
             'obj0_progress_shaping': 0.0,
             'obj1_total': 0.0,
             'obj1_energy_cost': 0.0,
@@ -1683,7 +1681,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.in_overtime = False
         self.overtime_steps = 0
         self._assigned_in_step = set()
-        self.pending_distance_reward = 0.0
         self._end_of_day_printed = False
         # ====== 多目标权重：每个 episode 一个偏好 ======
         if self.multi_objective_mode == "conditioned":
@@ -1906,42 +1903,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
     # ------------------ trip distance helpers ------------------
 
-    def _ensure_trip_started(self, drone: dict):
-        if not drone.get('trip_started', False):
-            drone['trip_started'] = True
-            drone['trip_actual_distance'] = 0.0
-            drone['trip_optimal_distance'] = 0.0
 
-    def _accumulate_trip_optimal_leg(self, drone: dict, start_loc, end_loc):
-        leg = math.sqrt((end_loc[0] - start_loc[0]) ** 2 + (end_loc[1] - start_loc[1]) ** 2)
-        drone['trip_optimal_distance'] = float(drone.get('trip_optimal_distance', 0.0)) + float(leg)
-
-    def _settle_trip_distance_reward(self, drone_id: int, drone: dict, reason: str = ""):
-        """整趟结束结算（建议归入目标0：效率）。"""
-        if not drone.get('trip_started', False):
-            return
-
-        optimal = float(drone.get('trip_optimal_distance', 0.0))
-        actual = float(drone.get('trip_actual_distance', 0.0))
-
-        if optimal < 0.1 or actual < 0.1:
-            r = 0.0
-        else:
-            efficiency = optimal / max(actual, 0.1)
-            if efficiency >= 0.95:
-                r = 1.0
-            elif efficiency >= 0.85:
-                r = 0.5
-            elif efficiency >= 0.75:
-                r = 0.0
-            else:
-                r = -0.5 * (1.0 - efficiency)
-
-        self.pending_distance_reward += float(r) * float(self.distance_reward_weight)
-
-    def _clear_trip_data(self, drone: dict):
-        for k in ['trip_started', 'trip_actual_distance', 'trip_optimal_distance']:
-            drone.pop(k, None)
 
     # ------------------ 强制状态同步/修复 ------------------
 
@@ -2646,12 +2608,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         rewards[0] += completed_reward
         rewards[0] -= cancelled_penalty_obj0
 
-        # 整趟距离效率：放到 obj0（效率）
-        distance_efficiency_reward = 0.0
-        if self.pending_distance_reward != 0.0:
-            distance_efficiency_reward = float(self.pending_distance_reward)
-            rewards[0] += distance_efficiency_reward
-            self.pending_distance_reward = 0.0
 
         # obj1：-成本（纯负成本）
         energy_cost = float(delta_energy) * 0.01
@@ -2672,7 +2628,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.last_step_reward_components.update({
             'obj0_completed': completed_reward,
             'obj0_cancelled': -cancelled_penalty_obj0,
-            'obj0_distance_efficiency': distance_efficiency_reward,
             'obj1_energy_cost': -energy_cost,
             'obj1_distance_cost': -distance_cost,
             'obj2_on_time': on_time_reward,
@@ -3010,9 +2965,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             # KEY FIX: Set serving_order_id when assigning to IDLE/RETURNING/CHARGING drone
             drone['serving_order_id'] = order_id
 
-            self._ensure_trip_started(drone)
-            self._accumulate_trip_optimal_leg(drone, drone['location'], target_merchant_loc)
-
             self._start_new_task(drone_id, drone, target_merchant_loc)
             self.state_manager.update_drone_status(drone_id, DroneStatus.FLYING_TO_MERCHANT, target_merchant_loc)
 
@@ -3025,8 +2977,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             # Redirect to new merchant for additional pickup
             # Keep serving_order_id as the order in cargo (being delivered)
             # This new assignment is for after delivery
-            self._ensure_trip_started(drone)
-            self._accumulate_trip_optimal_leg(drone, drone['location'], target_merchant_loc)
 
             self._start_new_task(drone_id, drone, target_merchant_loc)
             self.state_manager.update_drone_status(drone_id, DroneStatus.FLYING_TO_MERCHANT, target_merchant_loc)
@@ -3360,9 +3310,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             drone['cargo'].remove(oid)
 
     def _safe_reset_drone(self, drone_id, drone):
-        """唯一出口：整趟结算 + 清理 trip + 清理关联订单 + 返航"""
-        self._settle_trip_distance_reward(drone_id, drone, reason="safe_reset")
-        self._clear_trip_data(drone)
+        """唯一出口：清理关联订单 + 返航"""
 
         for order_id, order in list(self.orders.items()):
             if order.get('assigned_drone') == drone_id:
@@ -3414,9 +3362,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             if order and order['status'] == OrderStatus.PICKED_UP:
                 drone['current_delivery_index'] = i
 
-                self._ensure_trip_started(drone)
-                self._accumulate_trip_optimal_leg(drone, drone['location'], order['customer_location'])
-
                 self.state_manager.update_drone_status(drone_id, DroneStatus.FLYING_TO_CUSTOMER,
                                                        target_location=order['customer_location'])
                 return
@@ -3443,8 +3388,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             order = self.orders.get(order_id)
 
             if order and order['status'] == OrderStatus.PICKED_UP:
-                self._ensure_trip_started(drone)
-                self._accumulate_trip_optimal_leg(drone, drone['location'], order['customer_location'])
 
                 drone['current_delivery_index'] = current_index
                 self.state_manager.update_drone_status(drone_id, DroneStatus.FLYING_TO_CUSTOMER,
@@ -3579,9 +3522,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                         self.state_manager.update_order_status(oid, OrderStatus.PICKED_UP,
                                                                reason="arrived_merchant_pickup")
                         assigned_order['pickup_time'] = self.time_system.current_step
-
-                        self._ensure_trip_started(drone)
-                        self._accumulate_trip_optimal_leg(drone, drone['location'], assigned_order['customer_location'])
 
                         self._start_new_task(drone_id, drone, assigned_order['customer_location'])
                         self.state_manager.update_drone_status(
@@ -4436,7 +4376,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         print(f"  Obj0 (Throughput/Efficiency): {rc['obj0_total']:+.4f}")
         print(f"    - Completed bonus: {rc['obj0_completed']:+.4f} (delta={rc['delta_completed']:.0f})")
         print(f"    - Cancelled penalty: {rc['obj0_cancelled']:+.4f} (delta={rc['delta_cancelled']:.0f})")
-        print(f"    - Distance efficiency: {rc['obj0_distance_efficiency']:+.4f}")
         print(f"    - Progress shaping: {rc['obj0_progress_shaping']:+.4f}")
         print(f"  Obj1 (Cost): {rc['obj1_total']:+.4f}")
         print(f"    - Energy cost: {rc['obj1_energy_cost']:+.4f} (delta_energy={rc['delta_energy']:.2f})")
@@ -4475,16 +4414,12 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             info['avg_delivery_time'] = self.metrics['total_delivery_time'] / self.daily_stats['orders_completed']
             info['energy_efficiency'] = self.daily_stats['energy_consumed'] / self.daily_stats['orders_completed']
             info['on_time_rate'] = self.daily_stats['on_time_deliveries'] / self.daily_stats['orders_completed']
-            info['distance_efficiency'] = self.daily_stats['optimal_flight_distance'] / max(
-                self.daily_stats['total_flight_distance'], 0.1
-            )
             info['avg_distance_per_order'] = self.daily_stats['total_flight_distance'] / self.daily_stats[
                 'orders_completed']
         else:
             info['avg_delivery_time'] = 0
             info['energy_efficiency'] = 0
             info['on_time_rate'] = 0
-            info['distance_efficiency'] = 0
             info['avg_distance_per_order'] = 0
 
         return info
@@ -4507,9 +4442,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                 'on_time_rate': self.daily_stats['on_time_deliveries'] / max(1, self.daily_stats['orders_completed']),
                 'energy_efficiency': self.daily_stats['energy_consumed'] / max(1, self.daily_stats['orders_completed']),
                 'resource_utilization': self._calculate_resource_saturation(),
-                'distance_efficiency': self.daily_stats['optimal_flight_distance'] / max(
-                    self.daily_stats['total_flight_distance'], 0.1
-                ),
                 'total_flight_distance': self.daily_stats['total_flight_distance'],
                 'optimal_flight_distance': self.daily_stats['optimal_flight_distance'],
             },
