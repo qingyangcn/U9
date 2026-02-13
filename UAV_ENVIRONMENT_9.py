@@ -1150,7 +1150,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.action_applied_count = 0  # How many drones had targets updated from action this step
         
         # Cache decision points from before action execution for consistent statistics
-        self._last_decision_points_mask = []  # List[bool] - which drones were at decision points
+        self._last_decision_points_mask = [False] * self.num_drones  # List[bool] - which drones were at decision points
         self._last_decision_points_count = 0  # int - count of drones at decision points
 
         # Reward component tracking for diagnostics
@@ -2489,13 +2489,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                             (new_load > prev_load or prev_order_status != new_order_status)):
                             state_changed = True
 
-            # Set serving_order_id to track which order drone is executing
-            # (only if we haven't already counted state change from assignment)
-            if not state_changed:
-                # Check if setting serving_order_id and updating target represents a state change
-                if prev_serving_order_id != order_id:
-                    drone['serving_order_id'] = order_id
-                    # Continue to check if target/status also changed
+            # Always set serving_order_id to track which order drone is executing
+            # This maintains correct drone state regardless of whether it's counted as "applied"
+            drone['serving_order_id'] = order_id
 
             # Determine target based on order status (now handling ASSIGNED and PICKED_UP)
             if order['status'] == OrderStatus.PICKED_UP:
@@ -2506,13 +2502,14 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                     self.state_manager.update_drone_status(
                         drone_id, DroneStatus.FLYING_TO_CUSTOMER, target_location=customer_loc
                     )
-                    # Check if this represents a state change
-                    new_target = drone.get('target_location')
-                    new_status = drone['status']
-                    if (prev_target_location != new_target or 
-                        prev_status != new_status or 
-                        prev_serving_order_id != order_id):
-                        state_changed = True
+                    # Check if this represents a state change (if not already counted)
+                    if not state_changed:
+                        new_target = drone.get('target_location')
+                        new_status = drone['status']
+                        if (prev_target_location != new_target or 
+                            prev_status != new_status or 
+                            prev_serving_order_id != order_id):
+                            state_changed = True
                         
             elif order['status'] == OrderStatus.ASSIGNED:
                 # Order assigned but not picked up -> go to merchant
@@ -2524,13 +2521,14 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                     self.state_manager.update_drone_status(
                         drone_id, DroneStatus.FLYING_TO_MERCHANT, target_location=merchant_loc
                     )
-                    # Check if this represents a state change
-                    new_target = drone.get('target_location')
-                    new_status = drone['status']
-                    if (prev_target_location != new_target or 
-                        prev_status != new_status or 
-                        prev_serving_order_id != order_id):
-                        state_changed = True
+                    # Check if this represents a state change (if not already counted)
+                    if not state_changed:
+                        new_target = drone.get('target_location')
+                        new_status = drone['status']
+                        if (prev_target_location != new_target or 
+                            prev_status != new_status or 
+                            prev_serving_order_id != order_id):
+                            state_changed = True
 
             # STRICT: Only count as applied if actual state change occurred
             if state_changed:
