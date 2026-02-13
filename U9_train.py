@@ -485,7 +485,7 @@ def make_env(
 def train(args):
     try:
         from stable_baselines3 import PPO
-        from stable_baselines3.common.vec_env import DummyVecEnv
+        from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
         from stable_baselines3.common.callbacks import CheckpointCallback
     except ImportError as e:
         raise RuntimeError("Please install stable-baselines3: pip install stable-baselines3") from e
