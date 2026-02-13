@@ -2499,12 +2499,12 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             # If no target, reset cache and skip
             if current_target is None:
                 self._prev_target_loc[d] = None
-                self._prev_target_dist[d] = self._get_dist_to_target(d)  # Should be 0.0
+                self._prev_target_dist[d] = self._get_dist_to_target(d)
                 continue
             
-            # Check if target changed (tuple comparison)
+            # Check if target changed (handles None on first step after reset)
             prev_target = self._prev_target_loc[d]
-            target_changed = (prev_target != current_target)
+            target_changed = (prev_target is None or prev_target != current_target)
             
             # If target changed, update cache and skip progress shaping for this step
             if target_changed:
