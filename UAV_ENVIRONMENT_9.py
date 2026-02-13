@@ -1701,6 +1701,10 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.legacy_blocked_count = 0
         self.legacy_blocked_reasons.clear()
         self.action_applied_count = 0
+        
+        # Initialize decision point cache for diagnostics
+        self._last_decision_points_mask = [False] * self.num_drones
+        self._last_decision_points_count = 0
 
         obs = self._get_observation()
         obs['objective_weights'] = self.objective_weights.copy()
