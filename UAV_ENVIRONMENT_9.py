@@ -1148,6 +1148,10 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.enable_diagnostics = bool(enable_diagnostics)
         self.diagnostics_interval = int(diagnostics_interval)
         self.action_applied_count = 0  # How many drones had targets updated from action this step
+        
+        # Cache decision points from before action execution for consistent statistics
+        self._last_decision_points_mask = []  # List[bool] - which drones were at decision points
+        self._last_decision_points_count = 0  # int - count of drones at decision points
 
         # Reward component tracking for diagnostics
         self.last_step_reward_components = {
@@ -1723,6 +1727,12 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
         # U7: Update candidate mappings before processing action
         self._update_candidate_mappings()
+
+        # Cache decision points BEFORE processing action (for consistent diagnostics)
+        self._last_decision_points_mask = [
+            self._is_at_decision_point(drone_id) for drone_id in range(self.num_drones)
+        ]
+        self._last_decision_points_count = sum(self._last_decision_points_mask)
 
         # 处理动作（heading 不直接给奖励，奖励来自系统指标+shaping）
         r_vec = self._process_action(action)
@@ -2401,6 +2411,11 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         Action shape: (num_drones,) where:
           action[d]: rule_id in [0, R-1] for selecting orders at decision points
         Speed is controlled by a fixed multiplier (default 1.0).
+        
+        Strict applied counting: Only count action as applied when:
+        - Drone was at decision point BEFORE this action (cached)
+        - Rule selected a valid order
+        - Actual state change occurred (assignment, target update, status change)
         """
         self._last_route_heading = action
 
@@ -2415,8 +2430,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             # Store fixed speed multiplier (used in movement)
             drone['ppo_speed_multiplier'] = FIXED_SPEED_MULTIPLIER
 
-            # Only process rule at decision points
-            if not self._is_at_decision_point(drone_id):
+            # STRICT: Only process rule if drone was at decision point BEFORE action
+            # Use cached decision points, not real-time check
+            if not self._last_decision_points_mask[drone_id]:
                 continue
 
             # Extract rule_id from action
@@ -2429,26 +2445,53 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             # Apply rule to select an order
             order_id = self._select_order_by_rule(drone_id, rule_id)
 
-            # If no order selected by rule, skip
+            # If no order selected by rule, skip (not applied)
             if order_id is None or order_id not in self.orders:
                 continue
 
             order = self.orders[order_id]
 
-            # Set serving_order_id to track which order drone is executing
-            drone['serving_order_id'] = order_id
-
-            # Track that action was applied
-            self.action_applied_count += 1
+            # Track state before changes to detect if action actually applied
+            state_changed = False
+            
+            # Store previous state
+            prev_serving_order_id = drone.get('serving_order_id')
+            prev_target_location = drone.get('target_location')
+            prev_status = drone['status']
+            prev_load = drone['current_load']
 
             # Handle READY orders - assign them first
             if order['status'] == OrderStatus.READY:
-                # Rule selected a READY order -> assign it to this drone
+                # Rule selected a READY order -> try to assign it to this drone
                 if order.get('assigned_drone', -1) in (-1, None):
                     if drone['current_load'] < drone['max_capacity']:
+                        prev_order_status = order['status']
+                        prev_assigned_drone = order.get('assigned_drone', -1)
+                        
                         # Assign the order using the standard assignment mechanism
                         self._process_single_assignment(drone_id, order_id, allow_busy=True)
-                        # Now order is ASSIGNED, fall through to handle it
+                        
+                        # Check if assignment actually happened (state changed)
+                        # State change indicators for READY->ASSIGNED:
+                        # 1. Order status changed to ASSIGNED
+                        # 2. Order's assigned_drone is now this drone
+                        # 3. Drone's current_load increased
+                        new_order_status = order['status']
+                        new_assigned_drone = order.get('assigned_drone', -1)
+                        new_load = drone['current_load']
+                        
+                        if (new_order_status == OrderStatus.ASSIGNED and 
+                            new_assigned_drone == drone_id and 
+                            (new_load > prev_load or prev_order_status != new_order_status)):
+                            state_changed = True
+
+            # Set serving_order_id to track which order drone is executing
+            # (only if we haven't already counted state change from assignment)
+            if not state_changed:
+                # Check if setting serving_order_id and updating target represents a state change
+                if prev_serving_order_id != order_id:
+                    drone['serving_order_id'] = order_id
+                    # Continue to check if target/status also changed
 
             # Determine target based on order status (now handling ASSIGNED and PICKED_UP)
             if order['status'] == OrderStatus.PICKED_UP:
@@ -2459,6 +2502,14 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                     self.state_manager.update_drone_status(
                         drone_id, DroneStatus.FLYING_TO_CUSTOMER, target_location=customer_loc
                     )
+                    # Check if this represents a state change
+                    new_target = drone.get('target_location')
+                    new_status = drone['status']
+                    if (prev_target_location != new_target or 
+                        prev_status != new_status or 
+                        prev_serving_order_id != order_id):
+                        state_changed = True
+                        
             elif order['status'] == OrderStatus.ASSIGNED:
                 # Order assigned but not picked up -> go to merchant
                 merchant_id = order.get('merchant_id')
@@ -2469,6 +2520,17 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                     self.state_manager.update_drone_status(
                         drone_id, DroneStatus.FLYING_TO_MERCHANT, target_location=merchant_loc
                     )
+                    # Check if this represents a state change
+                    new_target = drone.get('target_location')
+                    new_status = drone['status']
+                    if (prev_target_location != new_target or 
+                        prev_status != new_status or 
+                        prev_serving_order_id != order_id):
+                        state_changed = True
+
+            # STRICT: Only count as applied if actual state change occurred
+            if state_changed:
+                self.action_applied_count += 1
 
         # Calculate rewards based on system metrics
         r_vec = self._calculate_three_objective_rewards()
@@ -4321,7 +4383,8 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                             break  # Count drone only once
 
         print(f"  Drones with serving_order_id: {drones_with_serving_order}/{self.num_drones}")
-        print(f"  Drones at decision points: {drones_at_decision_points}/{self.num_drones}")
+        # Use cached decision points count (from before action was processed)
+        print(f"  Drones at decision points: {self._last_decision_points_count}/{self.num_drones}")
         print(f"  Drones with ≥1 valid candidate: {drones_with_valid_candidates}/{self.num_drones}")
         print(f"  Drones with cargo candidates: {drones_with_cargo_candidates}/{self.num_drones}")
         print(f"  Drones with assigned candidates: {drones_with_assigned_candidates}/{self.num_drones}")
@@ -4391,7 +4454,10 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'time_state': self.time_system.get_time_state(),
             'backlog_size': len(self.active_orders),
             'legacy_blocked_count': self.legacy_blocked_count,
-            'legacy_fallback_enabled': self.enable_legacy_fallback
+            'legacy_fallback_enabled': self.enable_legacy_fallback,
+            # Add diagnostics statistics (consistent with strict counting)
+            'drones_at_decision_points': self._last_decision_points_count,
+            'actions_applied_this_step': self.action_applied_count
         }
 
         if self.daily_stats['orders_completed'] > 0:
