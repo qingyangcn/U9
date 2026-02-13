@@ -2557,7 +2557,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
         # obj1：-成本（纯负成本）
         energy_cost = float(delta_energy) * 0.01
-        distance_cost = float(delta_distance) * 0.02
+        distance_cost = float(delta_distance) * 0.001
         rewards[1] -= energy_cost
         rewards[1] -= distance_cost
 
@@ -4543,4 +4543,5 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'battery_return_threshold': self.battery_return_threshold,
             'battery_scale': 100.0,  # Battery level range: 0-100
         }
+
         return constraints
