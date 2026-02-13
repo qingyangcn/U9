@@ -390,6 +390,7 @@ class MOPSOAssignWrapper(gym.Wrapper):
             self.stats[key] = 0
 
     def step(self, action):
+
         # 1. Run MOPSO assignment-only periodically as pre-step operation
         if self._should_dispatch():
             mopso_assignment_only(self.env, self.planner)  # type: ignore[arg-type]
@@ -465,6 +466,7 @@ def make_env(
         energy_alpha=energy_alpha,
         battery_return_threshold=battery_return_threshold,
         multi_objective_mode="fixed",
+
     )
 
     planner = MOPSOPlanner(
@@ -515,11 +517,13 @@ def train(args):
             battery_return_threshold=args.battery_return_threshold,
         )
 
+    from stable_baselines3.common.vec_env import VecMonitor
     env = DummyVecEnv([env_fn])
+    env = VecMonitor(env)
 
     print("=" * 70)
-    print("U8 PPO: Rule-based discrete actions (R=5); MOPSO assignment-only each step")
-    print("Speed controlled by fixed multiplier (no PPO speed control)")
+    print("U8 PPO: Rule-based discrete actions (R=5); MOPSO assignment-only each 8 step")
+    print("Speed controlled by fixed multiplier")
     print("=" * 70)
     print(f"num_drones={args.num_drones}, obs_max_orders={args.obs_max_orders}, top_k_merchants={args.top_k_merchants}")
     print(f"candidate_k={args.candidate_k}, rule_count={args.rule_count}")
@@ -548,14 +552,14 @@ def train(args):
     checkpoint_callback = CheckpointCallback(
         save_freq=args.save_freq,
         save_path=args.model_dir,
-        name_prefix="ppo_u7_task",
+        name_prefix="ppo_u9_task",
         save_replay_buffer=False,
         save_vecnormalize=False,
     )
 
     model.learn(total_timesteps=args.total_steps, callback=checkpoint_callback, progress_bar=True)
 
-    final_path = os.path.join(args.model_dir, "ppo_u7_task_final")
+    final_path = os.path.join(args.model_dir, "ppo_u9_task_final")
     model.save(final_path)
     print(f"Saved final model to: {final_path}")
 
