@@ -4543,5 +4543,4 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'battery_return_threshold': self.battery_return_threshold,
             'battery_scale': 100.0,  # Battery level range: 0-100
         }
-
         return constraints
