@@ -1180,6 +1180,8 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.shaping_energy_k = float(shaping_energy_k)
         self.heading_guidance_alpha = float(np.clip(heading_guidance_alpha, 0.0, 1.0))
         self._prev_target_dist = np.zeros(self.num_drones, dtype=np.float32)
+        # Track previous target location for each drone to detect target changes
+        self._prev_target_loc = [None] * self.num_drones
 
         # ====== 时间系统（先建立，后续多个组件要用）======
         start_hour, end_hour = operating_hours
@@ -1683,6 +1685,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         # 初始化 shaping 距离缓存
         for d in range(self.num_drones):
             self._prev_target_dist[d] = self._get_dist_to_target(d)
+            # Reset target location cache to current target (or None if no target)
+            drone = self.drones[d]
+            self._prev_target_loc[d] = drone.get('target_location', None)
         self.episode_r_vec[:] = 0.0
 
         # U7: Initialize candidate mappings
@@ -2483,12 +2488,31 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
         for d in range(self.num_drones):
             drone = self.drones[d]
+            # Skip if drone is not in flying/returning status
             if drone['status'] not in [DroneStatus.FLYING_TO_MERCHANT, DroneStatus.FLYING_TO_CUSTOMER,
                                        DroneStatus.RETURNING_TO_BASE]:
                 continue
-            if 'target_location' not in drone:
+            
+            # Get current target location
+            current_target = drone.get('target_location', None)
+            
+            # If no target, reset cache and skip
+            if current_target is None:
+                self._prev_target_loc[d] = None
+                self._prev_target_dist[d] = self._get_dist_to_target(d)
                 continue
-
+            
+            # Check if target changed (handles None on first step after reset)
+            prev_target = self._prev_target_loc[d]
+            target_changed = (prev_target is None or prev_target != current_target)
+            
+            # If target changed, update cache and skip progress shaping for this step
+            if target_changed:
+                self._prev_target_loc[d] = current_target
+                self._prev_target_dist[d] = self._get_dist_to_target(d)
+                continue
+            
+            # Target is the same, calculate normal progress shaping
             new_dist = self._get_dist_to_target(d)
             prev_dist = float(self._prev_target_dist[d])
 
@@ -2508,6 +2532,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             # battery_consumption = float(drone["battery_consumption_rate"]) * float(self._get_weather_battery_factor())
             # r[1] -= self.shaping_energy_k * battery_consumption
 
+            # Update prev_dist for next step
             self._prev_target_dist[d] = new_dist
 
         # Track progress shaping for diagnostics
