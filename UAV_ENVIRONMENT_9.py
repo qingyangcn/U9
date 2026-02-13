@@ -2470,7 +2470,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                 if order.get('assigned_drone', -1) in (-1, None):
                     if drone['current_load'] < drone['max_capacity']:
                         prev_order_status = order['status']
-                        prev_assigned_drone = order.get('assigned_drone', -1)
                         
                         # Assign the order using the standard assignment mechanism
                         self._process_single_assignment(drone_id, order_id, allow_busy=True)
@@ -2484,9 +2483,12 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                         new_assigned_drone = order.get('assigned_drone', -1)
                         new_load = drone['current_load']
                         
+                        # State changed if order is now assigned to this drone and either:
+                        # - Load increased (order added to drone's capacity)
+                        # - Status changed from READY to ASSIGNED
                         if (new_order_status == OrderStatus.ASSIGNED and 
                             new_assigned_drone == drone_id and 
-                            (new_load > prev_load or prev_order_status != new_order_status)):
+                            new_load > prev_load):
                             state_changed = True
 
             # Always set serving_order_id to track which order drone is executing
