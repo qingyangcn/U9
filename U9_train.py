@@ -575,6 +575,7 @@ def train(args):
     # norm_obs=True: Normalizes observations for better feature scaling
     # clip_reward=10.0: Clips normalized rewards to prevent extreme values
     # gamma: Should match PPO gamma for proper reward normalization
+    # norm_obs_keys: Specify which observation keys to normalize (exclude 'weather' which is Discrete)
     env = VecNormalize(
         env,
         norm_obs=True,
@@ -582,6 +583,11 @@ def train(args):
         clip_obs=10.0,
         clip_reward=10.0,
         gamma=args.gamma,
+        norm_obs_keys=[
+            'air_traffic', 'bases', 'candidates', 'day_progress', 'drones',
+            'merchants', 'objective_weights', 'order_pattern', 'orders',
+            'pareto_info', 'resource_saturation', 'time', 'weather_details'
+        ],  # Exclude 'weather' which is Discrete(4)
     )
 
     print("=" * 70)
