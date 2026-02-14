@@ -152,8 +152,15 @@ Key hyperparameters (defaults):
 ### Performance Notes
 
 With VecNormalize enabled, you should observe:
-- `explained_variance` gradually increasing from near-0 to positive values (e.g., 0.3-0.9)
+- `explained_variance` gradually increasing from near-0 to positive values (e.g., 0.3-0.9) over the course of training
 - `value_loss` decreasing from initial high values (~14) to lower values (<5, ideally <1)
+  - In test runs with simple configurations, value_loss improved from 14.4 → 0.477 within 128 timesteps
+  - For full-scale training (e.g., 200K timesteps), expect gradual improvement rather than immediate drops
 - More stable training with reduced fluctuations in metrics
 
-These improvements indicate that the value function is learning to predict returns more accurately.
+**Important**: The rate of improvement depends on:
+- Problem complexity (number of drones, orders, etc.)
+- Hyperparameters (learning rate, batch size, etc.)
+- Random initialization and environment stochasticity
+
+These improvements indicate that the value function is learning to predict returns more accurately. Monitor tensorboard logs to track progress over time.

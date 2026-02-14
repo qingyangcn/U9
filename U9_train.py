@@ -533,10 +533,12 @@ def train(args):
     # norm_obs=True: Normalizes observations for better feature scaling
     # clip_reward=10.0: Clips normalized rewards to prevent extreme values
     # gamma: Should match PPO gamma for proper reward normalization
-    # norm_obs_keys: Specify which observation keys to normalize (exclude 'weather' which is Discrete)
-    # NOTE: This list includes all Box observation spaces. If the environment's observation space
-    # changes, update this list by running: env.observation_space.spaces.keys() and excluding
-    # any Discrete or other non-Box spaces.
+    # norm_obs_keys: Dynamically extract Box observation keys to exclude Discrete/other spaces
+    # This approach automatically adapts if the environment's observation space changes
+    box_obs_keys = [
+        key for key, space in env.get_attr('observation_space')[0].spaces.items()
+        if isinstance(space, gym.spaces.Box)
+    ]
     env = VecNormalize(
         env,
         norm_obs=True,
@@ -544,11 +546,7 @@ def train(args):
         clip_obs=10.0,
         clip_reward=10.0,
         gamma=args.gamma,
-        norm_obs_keys=[
-            'air_traffic', 'bases', 'candidates', 'day_progress', 'drones',
-            'merchants', 'objective_weights', 'order_pattern', 'orders',
-            'pareto_info', 'resource_saturation', 'time', 'weather_details'
-        ],  # Exclude 'weather' which is Discrete(4)
+        norm_obs_keys=box_obs_keys,
     )
 
     print("=" * 70)
