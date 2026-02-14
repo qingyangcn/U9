@@ -298,3 +298,204 @@ class PSOMOPSOCandidateGenerator(CandidateGenerator):
         # For now, use mixed heuristic as fallback
         # Future: Implement PSO/MOPSO optimization here
         return self._fallback.generate_candidates(env)
+
+
+class MOPSOCandidateGenerator(CandidateGenerator):
+    """
+    MOPSO-based candidate generation for U10.
+
+    Uses MOPSOPlanner from U7_mopso_dispatcher to generate candidate sets.
+    This is the UPPER LAYER that only generates candidates - it does NOT
+    commit orders (READY -> ASSIGNED). The actual assignment is handled by
+    the lower layer (rule selection via EventDrivenSingleUAVWrapper).
+
+    Key features:
+    - Generates K candidates per drone using MOPSO optimization
+    - Only uses READY, unassigned orders as input
+    - Ensures no duplicate orders within a drone's candidate set
+    - Allows same order across multiple drones (configurable)
+    - Falls back to heuristics when MOPSO returns insufficient candidates
+    """
+
+    def __init__(
+            self,
+            candidate_k: int = 20,
+            allow_order_sharing: bool = True,
+            n_particles: int = 30,
+            n_iterations: int = 10,
+            max_orders: int = 200,
+            max_orders_per_drone: int = 10,
+            seed: Optional[int] = None,
+            **mopso_kwargs
+    ):
+        """
+        Initialize MOPSO candidate generator.
+
+        Args:
+            candidate_k: Number of candidates per drone (K)
+            allow_order_sharing: If True, same order can appear in multiple drones' candidates
+            n_particles: Number of MOPSO particles
+            n_iterations: Number of MOPSO iterations
+            max_orders: Maximum orders for MOPSO to consider
+            max_orders_per_drone: Maximum orders per drone in MOPSO assignment
+            seed: Random seed
+            **mopso_kwargs: Additional arguments for MOPSOPlanner
+        """
+        super().__init__(candidate_k)
+        self.allow_order_sharing = allow_order_sharing
+        self.max_orders = max_orders
+        self.seed = seed
+
+        # Import MOPSOPlanner
+        try:
+            from U7_mopso_dispatcher import MOPSOPlanner
+            self.planner = MOPSOPlanner(
+                n_particles=n_particles,
+                n_iterations=n_iterations,
+                max_orders=max_orders,
+                max_orders_per_drone=max_orders_per_drone,
+                seed=seed,
+                **mopso_kwargs
+            )
+        except ImportError as e:
+            raise ImportError(
+                f"Failed to import MOPSOPlanner from U7_mopso_dispatcher: {e}. "
+                "Make sure U7_mopso_dispatcher.py and U6_mopso_dispatcher.py are available."
+            )
+
+        # Fallback generator for padding
+        self._fallback = MixedHeuristicCandidateGenerator(candidate_k)
+
+    def generate_candidates(
+            self,
+            env: 'ThreeObjectiveDroneDeliveryEnv'
+    ) -> Dict[int, List[int]]:
+        """
+        Generate candidate order sets for all drones using MOPSO.
+
+        This method:
+        1. Gets READY unassigned orders from environment
+        2. Runs MOPSOPlanner._run_mopso to get assignment suggestions
+        3. Extracts order_ids from MOPSO output for each drone
+        4. Pads/truncates to exactly K candidates per drone
+        5. Falls back to heuristics if MOPSO returns insufficient candidates
+
+        Args:
+            env: The UAV environment instance
+
+        Returns:
+            Dictionary mapping drone_id to list of order_ids (candidates)
+            Each list contains up to candidate_k order_ids
+        """
+        # Get snapshots from environment
+        ready_orders = env.get_ready_orders_snapshot(limit=self.max_orders)
+        drones = env.get_drones_snapshot()
+        merchants = env.get_merchants_snapshot()
+        constraints = env.get_route_plan_constraints()
+        objective_weights = getattr(env, 'objective_weights', np.array([0.33, 0.33, 0.34]))
+
+        # Filter drones with capacity
+        available_drones = []
+        for d in drones:
+            current_load = d.get('current_load', 0)
+            max_capacity = d.get('max_capacity', 10)
+            if current_load < max_capacity:
+                available_drones.append(d)
+
+        # If no drones or orders, return empty candidates
+        if not available_drones or not ready_orders:
+            return {drone_id: [] for drone_id in range(env.num_drones)}
+
+        # Run MOPSO to get assignment (Dict[int, List[int]])
+        try:
+            mopso_assignment = self.planner._run_mopso(
+                ready_orders[:self.max_orders],
+                available_drones,
+                merchants,
+                constraints,
+                objective_weights
+            )
+        except Exception as e:
+            # If MOPSO fails, fall back to heuristic
+            import warnings
+            warnings.warn(f"MOPSO candidate generation failed: {e}. Falling back to heuristic.")
+            return self._fallback.generate_candidates(env)
+
+        # Build candidate sets
+        candidates = {}
+        ready_order_ids = {o['order_id'] for o in ready_orders}
+
+        for drone_id in range(env.num_drones):
+            # Get MOPSO suggestions for this drone
+            mopso_orders = mopso_assignment.get(drone_id, [])
+
+            # Filter to ensure orders are still READY and unassigned
+            valid_orders = []
+            seen = set()
+            for oid in mopso_orders:
+                if oid in ready_order_ids and oid not in seen:
+                    valid_orders.append(oid)
+                    seen.add(oid)
+
+            # Pad if insufficient candidates
+            if len(valid_orders) < self.candidate_k:
+                valid_orders = self._pad_candidates(
+                    env, drone_id, valid_orders, ready_order_ids, seen
+                )
+
+            # Truncate to K
+            candidates[drone_id] = valid_orders[:self.candidate_k]
+
+        return candidates
+
+    def _pad_candidates(
+            self,
+            env: 'ThreeObjectiveDroneDeliveryEnv',
+            drone_id: int,
+            current_candidates: List[int],
+            ready_order_ids: set,
+            seen_orders: set
+    ) -> List[int]:
+        """
+        Pad candidate list with heuristic choices when MOPSO returns insufficient candidates.
+
+        Uses nearest distance heuristic to fill remaining slots.
+
+        Args:
+            env: Environment instance
+            drone_id: Drone ID
+            current_candidates: Current list of candidate order IDs
+            ready_order_ids: Set of all available READY order IDs
+            seen_orders: Set of order IDs already in candidates
+
+        Returns:
+            Padded list of candidate order IDs
+        """
+        drone = env.drones[drone_id]
+        drone_loc = drone['location']
+
+        # Calculate distances to all remaining ready orders
+        order_distances = []
+        for oid in ready_order_ids:
+            if oid in seen_orders:
+                continue
+            if oid not in env.orders:
+                continue
+
+            order = env.orders[oid]
+            merchant_loc = order['merchant_location']
+            distance = self._calculate_distance(drone_loc, merchant_loc)
+            order_distances.append((oid, distance))
+
+        # Sort by distance
+        order_distances.sort(key=lambda x: x[1])
+
+        # Add nearest orders until we have K candidates
+        padded_candidates = current_candidates.copy()
+        for oid, _ in order_distances:
+            if len(padded_candidates) >= self.candidate_k:
+                break
+            padded_candidates.append(oid)
+            seen_orders.add(oid)
+
+        return padded_candidates
