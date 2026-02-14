@@ -9,8 +9,8 @@ to ensure consistent normalization. Without this, the model will receive imprope
 scaled observations and rewards, leading to poor performance.
 
 Usage:
-    python evaluate_example.py --model-path ./models/u7_task/ppo_u9_task_final.zip \
-                                --vecnormalize-path ./models/u7_task/vecnormalize_final.pkl \
+    python evaluate_example.py --model-path ./models/u9_task/ppo_u9_task_final.zip \
+                                --vecnormalize-path ./models/u9_task/vecnormalize_final.pkl \
                                 --num-episodes 10
 """
 import argparse

@@ -488,48 +488,6 @@ def make_env(
     return env
 
 
-class SaveVecNormalizeCallback:
-    """
-    Callback for saving VecNormalize statistics along with model checkpoints.
-    
-    VecNormalize maintains running statistics (mean, variance) for observations and rewards.
-    These statistics must be saved and loaded together with the model to ensure consistent
-    normalization during evaluation or continued training.
-    
-    Usage:
-        - During training: Statistics are automatically saved with each checkpoint
-        - During evaluation: Load the stats using VecNormalize.load(path, venv)
-        - For continued training: Load the stats before creating the PPO model
-    """
-    def __init__(self, check_freq: int, save_path: str, name_prefix: str = "vecnormalize"):
-        from stable_baselines3.common.callbacks import BaseCallback
-        
-        class _InnerCallback(BaseCallback):
-            def __init__(self, check_freq: int, save_path: str, name_prefix: str):
-                super().__init__()
-                self.check_freq = check_freq
-                self.save_path = save_path
-                self.name_prefix = name_prefix
-                
-            def _on_step(self) -> bool:
-                if self.n_calls % self.check_freq == 0:
-                    # Save VecNormalize statistics
-                    vec_normalize_path = os.path.join(
-                        self.save_path, 
-                        f"{self.name_prefix}_{self.num_timesteps}_steps.pkl"
-                    )
-                    if hasattr(self.model.get_env(), 'save'):
-                        self.model.get_env().save(vec_normalize_path)
-                        if self.verbose >= 1:
-                            print(f"Saved VecNormalize to {vec_normalize_path}")
-                return True
-        
-        self.callback = _InnerCallback(check_freq, save_path, name_prefix)
-    
-    def __call__(self):
-        return self.callback
-
-
 def train(args):
     try:
         from stable_baselines3 import PPO
@@ -537,6 +495,39 @@ def train(args):
         from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
     except ImportError as e:
         raise RuntimeError("Please install stable-baselines3: pip install stable-baselines3") from e
+
+    # Define SaveVecNormalizeCallback inside train to have access to BaseCallback
+    class SaveVecNormalizeCallback(BaseCallback):
+        """
+        Callback for saving VecNormalize statistics along with model checkpoints.
+        
+        VecNormalize maintains running statistics (mean, variance) for observations and rewards.
+        These statistics must be saved and loaded together with the model to ensure consistent
+        normalization during evaluation or continued training.
+        
+        Usage:
+            - During training: Statistics are automatically saved with each checkpoint
+            - During evaluation: Load the stats using VecNormalize.load(path, venv)
+            - For continued training: Load the stats before creating the PPO model
+        """
+        def __init__(self, check_freq: int, save_path: str, name_prefix: str = "vecnormalize", verbose: int = 0):
+            super().__init__(verbose)
+            self.check_freq = check_freq
+            self.save_path = save_path
+            self.name_prefix = name_prefix
+            
+        def _on_step(self) -> bool:
+            if self.n_calls % self.check_freq == 0:
+                # Save VecNormalize statistics
+                vec_normalize_path = os.path.join(
+                    self.save_path, 
+                    f"{self.name_prefix}_{self.num_timesteps}_steps.pkl"
+                )
+                if hasattr(self.model.get_env(), 'save'):
+                    self.model.get_env().save(vec_normalize_path)
+                    if self.verbose >= 1:
+                        print(f"Saved VecNormalize to {vec_normalize_path}")
+            return True
 
     # Create log directory if specified and not None
     if args.log_dir is not None:
@@ -576,6 +567,9 @@ def train(args):
     # clip_reward=10.0: Clips normalized rewards to prevent extreme values
     # gamma: Should match PPO gamma for proper reward normalization
     # norm_obs_keys: Specify which observation keys to normalize (exclude 'weather' which is Discrete)
+    # NOTE: This list includes all Box observation spaces. If the environment's observation space
+    # changes, update this list by running: env.observation_space.spaces.keys() and excluding
+    # any Discrete or other non-Box spaces.
     env = VecNormalize(
         env,
         norm_obs=True,
@@ -631,8 +625,9 @@ def train(args):
     vecnormalize_callback = SaveVecNormalizeCallback(
         check_freq=args.save_freq,
         save_path=args.model_dir,
-        name_prefix="vecnormalize"
-    )()
+        name_prefix="vecnormalize",
+        verbose=1
+    )
 
     model.learn(
         total_timesteps=args.total_steps, 
@@ -714,8 +709,8 @@ def main():
     p.add_argument("--clip-range", type=float, default=0.1)
 
     p.add_argument("--save-freq", type=int, default=10000)
-    p.add_argument("--log-dir", type=str, default="./logs/u7_task")
-    p.add_argument("--model-dir", type=str, default="./models/u7_task")
+    p.add_argument("--log-dir", type=str, default="./logs/u9_task")
+    p.add_argument("--model-dir", type=str, default="./models/u9_task")
 
     args = p.parse_args()
     train(args)

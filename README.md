@@ -47,7 +47,7 @@ The training script automatically saves:
 
 **Saved files structure:**
 ```
-./models/u7_task/
+./models/u9_task/
 ├── ppo_u9_task_10000_steps.zip       # Model checkpoint
 ├── vecnormalize_10000_steps.pkl      # VecNormalize stats for checkpoint
 ├── ppo_u9_task_20000_steps.zip
@@ -65,8 +65,8 @@ The training script automatically saves:
 
 ```bash
 python evaluate_example.py \
-    --model-path ./models/u7_task/ppo_u9_task_final.zip \
-    --vecnormalize-path ./models/u7_task/vecnormalize_final.pkl \
+    --model-path ./models/u9_task/ppo_u9_task_final.zip \
+    --vecnormalize-path ./models/u9_task/vecnormalize_final.pkl \
     --num-episodes 10
 ```
 
@@ -81,14 +81,14 @@ env = DummyVecEnv([env_fn])
 env = VecMonitor(env)
 
 # Load VecNormalize statistics (REQUIRED)
-env = VecNormalize.load("./models/u7_task/vecnormalize_final.pkl", env)
+env = VecNormalize.load("./models/u9_task/vecnormalize_final.pkl", env)
 
 # For evaluation, disable training mode
 env.training = False
 env.norm_reward = False
 
 # Load model
-model = PPO.load("./models/u7_task/ppo_u9_task_final", env=env)
+model = PPO.load("./models/u9_task/ppo_u9_task_final", env=env)
 
 # Evaluate
 obs = env.reset()
@@ -108,12 +108,12 @@ env = DummyVecEnv([env_fn])
 env = VecMonitor(env)
 
 # Load VecNormalize statistics (keep training=True for continued training)
-env = VecNormalize.load("./models/u7_task/vecnormalize_20000_steps.pkl", env)
+env = VecNormalize.load("./models/u9_task/vecnormalize_20000_steps.pkl", env)
 env.training = True  # Keep normalization training enabled
 env.norm_reward = True
 
 # Load model
-model = PPO.load("./models/u7_task/ppo_u9_task_20000_steps", env=env)
+model = PPO.load("./models/u9_task/ppo_u9_task_20000_steps", env=env)
 
 # Continue training
 model.learn(total_timesteps=100000)
