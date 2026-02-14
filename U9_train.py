@@ -1,7 +1,7 @@
 """
-U8 PPO Training (Rule-Based Discrete Actions) + MOPSO Assignment-Only
+U9 PPO Training (Rule-Based Discrete Actions) + MOPSO Assignment-Only + VecNormalize
 
-- Env: UAV_ENVIRONMENT_8.ThreeObjectiveDroneDeliveryEnv
+- Env: UAV_ENVIRONMENT_9.ThreeObjectiveDroneDeliveryEnv
   * Action: MultiDiscrete([R]*num_drones) where:
       action[d] = rule_id in [0, R-1] for interpretable order selection
       R=5 rules: CARGO_FIRST, ASSIGNED_EDF, READY_EDF, NEAREST_PICKUP, SLACK_PER_DISTANCE
@@ -20,9 +20,15 @@ U8 PPO Training (Rule-Based Discrete Actions) + MOPSO Assignment-Only
   * first_valid: select first valid candidate
   * none: no fallback (for testing PPO behavior)
 
+- VecNormalize: Improves PPO training stability
+  * Normalizes observations and rewards to address high value_loss and low explained_variance
+  * Statistics are saved with checkpoints and final model
+  * IMPORTANT: When evaluating or continuing training, load VecNormalize stats:
+      env = VecNormalize.load("vecnormalize_final.pkl", venv)
+
 Run:
-  python U8_train.py --total-steps 200000 --seed 42 --num-drones 50 --obs-max-orders 400
-  python U8_train.py --fallback-policy cargo_first --debug-stats-interval 100
+  python U9_train.py --total-steps 200000 --seed 42 --num-drones 50 --obs-max-orders 400
+  python U9_train.py --fallback-policy cargo_first --debug-stats-interval 100
 """
 from __future__ import annotations
 
@@ -485,7 +491,7 @@ def make_env(
 def train(args):
     try:
         from stable_baselines3 import PPO
-        from stable_baselines3.common.vec_env import DummyVecEnv
+        from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
         from stable_baselines3.common.callbacks import CheckpointCallback
     except ImportError as e:
         raise RuntimeError("Please install stable-baselines3: pip install stable-baselines3") from e
@@ -520,10 +526,34 @@ def train(args):
     from stable_baselines3.common.vec_env import VecMonitor
     env = DummyVecEnv([env_fn])
     env = VecMonitor(env)
+    
+    # VecNormalize: Normalize rewards and observations to improve PPO training stability
+    # This addresses the issue where value_loss was ~1e4 and explained_variance near 0
+    # norm_reward=True: Normalizes rewards to reduce scale and improve critic learning
+    # norm_obs=True: Normalizes observations for better feature scaling
+    # clip_reward=10.0: Clips normalized rewards to prevent extreme values
+    # gamma: Should match PPO gamma for proper reward normalization
+    # norm_obs_keys: Dynamically extract Box observation keys to exclude Discrete/other spaces
+    # This approach automatically adapts if the environment's observation space changes
+    # Note: [0] indexing is safe because all envs in DummyVecEnv share the same observation space
+    box_obs_keys = [
+        key for key, space in env.get_attr('observation_space')[0].spaces.items()
+        if isinstance(space, gym.spaces.Box)
+    ]
+    env = VecNormalize(
+        env,
+        norm_obs=True,
+        norm_reward=True,
+        clip_obs=10.0,
+        clip_reward=10.0,
+        gamma=args.gamma,
+        norm_obs_keys=box_obs_keys,
+    )
 
     print("=" * 70)
-    print("U8 PPO: Rule-based discrete actions (R=5); MOPSO assignment-only each 8 step")
+    print("U9 PPO: Rule-based discrete actions (R=5); MOPSO assignment-only each 8 step")
     print("Speed controlled by fixed multiplier")
+    print("VecNormalize: ENABLED (norm_obs=True, norm_reward=True) for training stability")
     print("=" * 70)
     print(f"num_drones={args.num_drones}, obs_max_orders={args.obs_max_orders}, top_k_merchants={args.top_k_merchants}")
     print(f"candidate_k={args.candidate_k}, rule_count={args.rule_count}")
@@ -554,14 +584,27 @@ def train(args):
         save_path=args.model_dir,
         name_prefix="ppo_u9_task",
         save_replay_buffer=False,
-        save_vecnormalize=False,
+        save_vecnormalize=True,  # Built-in VecNormalize saving with checkpoints
     )
 
-    model.learn(total_timesteps=args.total_steps, callback=checkpoint_callback, progress_bar=True)
+    model.learn(
+        total_timesteps=args.total_steps, 
+        callback=checkpoint_callback, 
+        progress_bar=True
+    )
 
     final_path = os.path.join(args.model_dir, "ppo_u9_task_final")
     model.save(final_path)
     print(f"Saved final model to: {final_path}")
+    
+    # Save final VecNormalize statistics
+    # IMPORTANT: When loading this model for evaluation or continued training,
+    # you must also load the VecNormalize stats to ensure consistent normalization
+    # Example: env = VecNormalize.load("vecnormalize_final.pkl", venv)
+    vecnormalize_path = os.path.join(args.model_dir, "vecnormalize_final.pkl")
+    env.save(vecnormalize_path)
+    print(f"Saved VecNormalize statistics to: {vecnormalize_path}")
+    print(f"Note: Load VecNormalize stats when evaluating: VecNormalize.load('{vecnormalize_path}', venv)")
 
     env.close()
 
@@ -624,8 +667,8 @@ def main():
     p.add_argument("--clip-range", type=float, default=0.1)
 
     p.add_argument("--save-freq", type=int, default=10000)
-    p.add_argument("--log-dir", type=str, default="./logs/u7_task")
-    p.add_argument("--model-dir", type=str, default="./models/u7_task")
+    p.add_argument("--log-dir", type=str, default="./logs/u9_task")
+    p.add_argument("--model-dir", type=str, default="./models/u9_task")
 
     args = p.parse_args()
     train(args)
