@@ -123,9 +123,9 @@ def make_env(
     )
 
     # Create MOPSO candidate generator
+    # Note: Order sharing across drones is always enabled for robustness
     candidate_generator = MOPSOCandidateGenerator(
         candidate_k=candidate_k,
-        allow_order_sharing=True,  # Allow same order in multiple drones' candidates
         n_particles=mopso_n_particles,
         n_iterations=mopso_n_iterations,
         max_orders=mopso_max_orders,
@@ -194,6 +194,8 @@ def train(args):
 
     # VecNormalize for training stability
     # Extract Box observation keys for normalization
+    # Note: [0] indexing assumes DummyVecEnv where all envs share the same observation space
+    # This is safe because we use DummyVecEnv([env_fn]) above
     box_obs_keys = [
         key for key, space in env.get_attr('observation_space')[0].spaces.items()
         if isinstance(space, gym.spaces.Box)

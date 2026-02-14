@@ -313,14 +313,13 @@ class MOPSOCandidateGenerator(CandidateGenerator):
     - Generates K candidates per drone using MOPSO optimization
     - Only uses READY, unassigned orders as input
     - Ensures no duplicate orders within a drone's candidate set
-    - Allows same order across multiple drones (configurable)
+    - Allows same order across multiple drones' candidates for robustness
     - Falls back to heuristics when MOPSO returns insufficient candidates
     """
 
     def __init__(
             self,
             candidate_k: int = 20,
-            allow_order_sharing: bool = True,
             n_particles: int = 30,
             n_iterations: int = 10,
             max_orders: int = 200,
@@ -333,16 +332,19 @@ class MOPSOCandidateGenerator(CandidateGenerator):
 
         Args:
             candidate_k: Number of candidates per drone (K)
-            allow_order_sharing: If True, same order can appear in multiple drones' candidates
             n_particles: Number of MOPSO particles
             n_iterations: Number of MOPSO iterations
             max_orders: Maximum orders for MOPSO to consider
             max_orders_per_drone: Maximum orders per drone in MOPSO assignment
             seed: Random seed
             **mopso_kwargs: Additional arguments for MOPSOPlanner
+        
+        Note:
+            Order sharing across drones' candidate sets is always allowed to provide
+            robustness. This allows multiple drones to consider the same order, with
+            the lower layer (rule selection) making the final choice.
         """
         super().__init__(candidate_k)
-        self.allow_order_sharing = allow_order_sharing
         self.max_orders = max_orders
         self.seed = seed
 
@@ -479,10 +481,12 @@ class MOPSOCandidateGenerator(CandidateGenerator):
         for oid in ready_order_ids:
             if oid in seen_orders:
                 continue
-            if oid not in env.orders:
+            
+            # Safely access order
+            order = env.orders.get(oid)
+            if order is None:
                 continue
 
-            order = env.orders[oid]
             merchant_loc = order['merchant_location']
             distance = self._calculate_distance(drone_loc, merchant_loc)
             order_distances.append((oid, distance))
