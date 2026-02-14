@@ -48,13 +48,13 @@ The training script automatically saves:
 **Saved files structure:**
 ```
 ./models/u9_task/
-├── ppo_u9_task_10000_steps.zip       # Model checkpoint
-├── vecnormalize_10000_steps.pkl      # VecNormalize stats for checkpoint
+├── ppo_u9_task_10000_steps.zip               # Model checkpoint
+├── ppo_u9_task_vecnormalize_10000_steps.pkl  # VecNormalize stats for checkpoint
 ├── ppo_u9_task_20000_steps.zip
-├── vecnormalize_20000_steps.pkl
+├── ppo_u9_task_vecnormalize_20000_steps.pkl
 ├── ...
-├── ppo_u9_task_final.zip             # Final model
-└── vecnormalize_final.pkl            # Final VecNormalize stats
+├── ppo_u9_task_final.zip                     # Final model
+└── vecnormalize_final.pkl                    # Final VecNormalize stats
 ```
 
 ### Evaluation and Model Loading
@@ -108,7 +108,7 @@ env = DummyVecEnv([env_fn])
 env = VecMonitor(env)
 
 # Load VecNormalize statistics (keep training=True for continued training)
-env = VecNormalize.load("./models/u9_task/vecnormalize_20000_steps.pkl", env)
+env = VecNormalize.load("./models/u9_task/ppo_u9_task_vecnormalize_20000_steps.pkl", env)
 env.training = True  # Keep normalization training enabled
 env.norm_reward = True
 

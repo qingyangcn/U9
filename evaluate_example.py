@@ -109,9 +109,10 @@ def evaluate_model(model_path: str, vecnormalize_path: str, num_episodes: int = 
         while not done:
             # Use deterministic actions for evaluation
             action, _states = model.predict(obs, deterministic=True)
-            obs, reward, done, info = env.step(action)
+            obs, reward, dones, info = env.step(action)
             episode_reward += reward[0]
             episode_length += 1
+            done = dones[0]  # For vectorized env, done is an array
         
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)
