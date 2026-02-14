@@ -535,6 +535,7 @@ def train(args):
     # gamma: Should match PPO gamma for proper reward normalization
     # norm_obs_keys: Dynamically extract Box observation keys to exclude Discrete/other spaces
     # This approach automatically adapts if the environment's observation space changes
+    # Note: [0] indexing is safe because all envs in DummyVecEnv share the same observation space
     box_obs_keys = [
         key for key, space in env.get_attr('observation_space')[0].spaces.items()
         if isinstance(space, gym.spaces.Box)

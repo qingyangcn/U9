@@ -18,9 +18,9 @@ VecNormalize has been added to address training instability issues where:
 
 **Benefits:**
 - Normalizes rewards to reduce scale and improve critic learning
-- Normalizes observations for better feature scaling (excluding discrete 'weather' key)
+- Normalizes observations for better feature scaling (dynamically excludes non-Box spaces like Discrete)
 - Maintains running statistics (mean, variance) for consistent normalization
-- Test runs show `value_loss` dropping from ~14 to <1 within 128 steps
+- Significantly improves value function fitting (test: value_loss 14→0.5 in 128 steps with minimal config)
 
 ### Training
 
@@ -153,9 +153,9 @@ Key hyperparameters (defaults):
 
 With VecNormalize enabled, you should observe:
 - `explained_variance` gradually increasing from near-0 to positive values (e.g., 0.3-0.9) over the course of training
-- `value_loss` decreasing from initial high values (~14) to lower values (<5, ideally <1)
-  - In test runs with simple configurations, value_loss improved from 14.4 → 0.477 within 128 timesteps
-  - For full-scale training (e.g., 200K timesteps), expect gradual improvement rather than immediate drops
+- `value_loss` decreasing from initial high values to lower, more stable values
+  - **Test configuration** (5 drones, 50 orders, 128 timesteps): 14.4 → 0.477
+  - **Full-scale training** (20+ drones, 400 orders, 200K timesteps): Expect gradual improvement over thousands of timesteps
 - More stable training with reduced fluctuations in metrics
 
 **Important**: The rate of improvement depends on:
