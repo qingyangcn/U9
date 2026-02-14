@@ -1097,6 +1097,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                  num_candidates: int = 20,  # K=20 candidate orders per drone for PPO selection
                  # ===== U8: Rule-based action space =====
                  rule_count: int = 5,  # Number of interpretable rules for discrete action space
+                 # ===== U9: Candidate-based filtering parameters =====
+                 candidate_fallback_enabled: bool = True,  # Allow fallback to full active_orders if candidates empty
+                 candidate_update_interval: int = 1,  # Update candidates every N steps (1=every step, 0=only on reset)
                  # ===== Legacy fallback control =====
                  enable_legacy_fallback: bool = True,  # Enable legacy fallback behavior for backward compatibility
                  # ===== Diagnostics control =====
@@ -1131,6 +1134,14 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.rule_count = int(rule_count)  # R=5 interpretable rules
         # Rule usage statistics for diagnostics
         self.rule_usage_stats = defaultdict(int)
+
+        # ========== U9: Candidate-based filtering ==========
+        self.candidate_fallback_enabled = bool(candidate_fallback_enabled)
+        self.candidate_update_interval = int(candidate_update_interval)
+        # External candidate generator (can be set via set_candidate_generator)
+        self.candidate_generator = None
+        # Filtered candidate sets: {drone_id: [order_id, ...]}
+        self.filtered_candidates = {}
 
         # ========== 多目标训练方式 ==========
         self.multi_objective_mode = multi_objective_mode
@@ -1700,6 +1711,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         # U7: Initialize candidate mappings
         self._update_candidate_mappings()
 
+        # U9: Initialize filtered candidates from external generator
+        self.update_filtered_candidates()
+
         # Reset legacy fallback counter and reasons
         self.legacy_blocked_count = 0
         self.legacy_blocked_reasons.clear()
@@ -1734,6 +1748,11 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
         # U7: Update candidate mappings before processing action
         self._update_candidate_mappings()
+
+        # U9: Update filtered candidates based on interval
+        if self.candidate_update_interval > 0:
+            if self.time_system.current_step % self.candidate_update_interval == 0:
+                self.update_filtered_candidates()
 
         # Cache decision points BEFORE processing action (for consistent diagnostics)
         self._last_decision_points_mask = [
@@ -1902,8 +1921,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                 self._generate_single_order()
 
     # ------------------ trip distance helpers ------------------
-
-
 
     # ------------------ 强制状态同步/修复 ------------------
 
@@ -2250,7 +2267,12 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         best_order_id = None
         best_deadline = float('inf')
 
-        for order_id in self.active_orders:
+        # U9: Apply candidate filtering
+        candidate_constrained_orders = self._get_candidate_constrained_orders(
+            drone_id, list(self.active_orders)
+        )
+
+        for order_id in candidate_constrained_orders:
             if order_id not in self.orders:
                 continue
             order = self.orders[order_id]
@@ -2279,7 +2301,12 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         best_order_id = None
         best_deadline = float('inf')
 
-        for order_id in self.active_orders:
+        # U9: Apply candidate filtering
+        candidate_constrained_orders = self._get_candidate_constrained_orders(
+            drone_id, list(self.active_orders)
+        )
+
+        for order_id in candidate_constrained_orders:
             if order_id not in self.orders:
                 continue
             order = self.orders[order_id]
@@ -2305,8 +2332,13 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         best_order_id = None
         best_distance = float('inf')
 
+        # U9: Apply candidate filtering
+        candidate_constrained_orders = self._get_candidate_constrained_orders(
+            drone_id, list(self.active_orders)
+        )
+
         # Consider both ASSIGNED orders and READY orders
-        for order_id in self.active_orders:
+        for order_id in candidate_constrained_orders:
             if order_id not in self.orders:
                 continue
             order = self.orders[order_id]
@@ -2344,8 +2376,13 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         best_order_id = None
         best_score = -float('inf')
 
+        # U9: Apply candidate filtering
+        candidate_constrained_orders = self._get_candidate_constrained_orders(
+            drone_id, list(self.active_orders)
+        )
+
         # Consider both ASSIGNED and READY orders
-        for order_id in self.active_orders:
+        for order_id in candidate_constrained_orders:
             if order_id not in self.orders:
                 continue
             order = self.orders[order_id]
@@ -2607,7 +2644,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         cancelled_penalty_obj0 = float(delta_cancelled) * 1.0
         rewards[0] += completed_reward
         rewards[0] -= cancelled_penalty_obj0
-
 
         # obj1：-成本（纯负成本）
         energy_cost = float(delta_energy) * 0.01
@@ -3388,7 +3424,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             order = self.orders.get(order_id)
 
             if order and order['status'] == OrderStatus.PICKED_UP:
-
                 drone['current_delivery_index'] = current_index
                 self.state_manager.update_drone_status(drone_id, DroneStatus.FLYING_TO_CUSTOMER,
                                                        target_location=order['customer_location'])
@@ -4579,3 +4614,178 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'battery_scale': 100.0,  # Battery level range: 0-100
         }
         return constraints
+
+    # ================ U9: Candidate-based filtering support ================
+
+    def set_candidate_generator(self, generator):
+        """
+        Set external candidate generator for upper-layer candidate generation.
+
+        Args:
+            generator: Instance of CandidateGenerator or compatible class
+                      Must implement generate_candidates(env) -> Dict[int, List[int]]
+        """
+        self.candidate_generator = generator
+
+    def update_filtered_candidates(self):
+        """
+        Update filtered_candidates using the external candidate generator.
+        If no generator is set, filtered_candidates remains empty (fallback to active_orders).
+
+        This should be called:
+        - On reset
+        - Every candidate_update_interval steps (if > 0)
+        - When decision queue is empty (in wrapper context)
+        """
+        if self.candidate_generator is None:
+            self.filtered_candidates = {}
+            return
+
+        # Generate candidates using the external generator
+        self.filtered_candidates = self.candidate_generator.generate_candidates(self)
+
+    def get_filtered_candidates_for_drone(self, drone_id: int) -> List[int]:
+        """
+        Get filtered candidate order IDs for a specific drone.
+
+        Args:
+            drone_id: The drone ID
+
+        Returns:
+            List of order IDs that are candidates for this drone
+            Returns empty list if no candidates are set
+        """
+        return self.filtered_candidates.get(drone_id, [])
+
+    def _get_candidate_constrained_orders(self, drone_id: int, order_ids: List[int]) -> List[int]:
+        """
+        Filter order_ids to only include those in the drone's candidate set.
+
+        Args:
+            drone_id: The drone ID
+            order_ids: List of order IDs to filter
+
+        Returns:
+            Filtered list of order IDs that are in candidates[drone_id] ∩ order_ids
+            If candidate_fallback_enabled and no candidates, returns original order_ids
+        """
+        candidates = self.get_filtered_candidates_for_drone(drone_id)
+
+        # If no candidates and fallback is enabled, return all orders
+        if not candidates and self.candidate_fallback_enabled:
+            return order_ids
+
+        # Filter to candidates only
+        candidate_set = set(candidates)
+        return [oid for oid in order_ids if oid in candidate_set]
+
+    # ================ U9: Event-driven single UAV decision support ================
+
+    def get_decision_drones(self) -> List[int]:
+        """
+        Get list of drone IDs that are currently at decision points.
+
+        Returns:
+            List of drone IDs at decision points
+        """
+        decision_drones = []
+        for drone_id in range(self.num_drones):
+            if self._is_at_decision_point(drone_id):
+                decision_drones.append(drone_id)
+        return decision_drones
+
+    def apply_rule_to_drone(self, drone_id: int, rule_id: int) -> bool:
+        """
+        Apply a rule to a specific drone for order selection and assignment.
+
+        This method is used by the EventDrivenSingleUAVWrapper to apply
+        a single rule action to one drone at a time.
+
+        Args:
+            drone_id: The drone to apply the rule to
+            rule_id: The rule ID (0-4) to apply
+
+        Returns:
+            True if the rule was successfully applied and changed state, False otherwise
+        """
+        if drone_id < 0 or drone_id >= self.num_drones:
+            return False
+
+        drone = self.drones[drone_id]
+
+        # Check if drone is at decision point
+        if not self._is_at_decision_point(drone_id):
+            return False
+
+        # Apply rule to select an order
+        order_id = self._select_order_by_rule(drone_id, rule_id)
+
+        # If no order selected, rule didn't apply
+        if order_id is None or order_id not in self.orders:
+            return False
+
+        order = self.orders[order_id]
+
+        # Track state before changes
+        state_changed = False
+        prev_serving_order_id = drone.get('serving_order_id')
+        prev_target_location = drone.get('target_location')
+        prev_status = drone['status']
+        prev_load = drone['current_load']
+
+        # Handle READY orders - assign them first
+        if order['status'] == OrderStatus.READY:
+            if order.get('assigned_drone', -1) in (-1, None):
+                if drone['current_load'] < drone['max_capacity']:
+                    # Assign the order
+                    self._process_single_assignment(drone_id, order_id, allow_busy=True)
+
+                    # Check if assignment happened
+                    new_order_status = order['status']
+                    new_assigned_drone = order.get('assigned_drone', -1)
+                    new_load = drone['current_load']
+
+                    if (new_order_status == OrderStatus.ASSIGNED and
+                            new_assigned_drone == drone_id and
+                            new_load > prev_load):
+                        state_changed = True
+
+        # Set serving_order_id and target
+        drone['serving_order_id'] = order_id
+
+        # Determine target based on order status
+        if order['status'] == OrderStatus.PICKED_UP:
+            # Deliver to customer
+            customer_loc = order.get('customer_location')
+            if customer_loc:
+                drone['target_location'] = customer_loc
+                self.state_manager.update_drone_status(
+                    drone_id, DroneStatus.FLYING_TO_CUSTOMER, target_location=customer_loc
+                )
+                if not state_changed:
+                    new_target = drone.get('target_location')
+                    new_status = drone['status']
+                    if (prev_target_location != new_target or
+                            prev_status != new_status or
+                            prev_serving_order_id != order_id):
+                        state_changed = True
+
+        elif order['status'] == OrderStatus.ASSIGNED:
+            # Go to merchant
+            merchant_id = order.get('merchant_id')
+            if merchant_id and merchant_id in self.merchants:
+                merchant_loc = self.merchants[merchant_id]['location']
+                drone['target_location'] = merchant_loc
+                drone['current_merchant_id'] = merchant_id
+                self.state_manager.update_drone_status(
+                    drone_id, DroneStatus.FLYING_TO_MERCHANT, target_location=merchant_loc
+                )
+                if not state_changed:
+                    new_target = drone.get('target_location')
+                    new_status = drone['status']
+                    if (prev_target_location != new_target or
+                            prev_status != new_status or
+                            prev_serving_order_id != order_id):
+                        state_changed = True
+
+        return state_changed
