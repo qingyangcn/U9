@@ -4237,16 +4237,17 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'objective_weights': self.objective_weights.copy()
         }
         
-        # Self-check: Verify all observation_space keys are present
-        obs_space_keys = set(self.observation_space.spaces.keys())
-        obs_keys = set(obs_dict.keys())
-        missing_keys = obs_space_keys - obs_keys
-        if missing_keys:
-            raise KeyError(
-                f"_get_observation() missing required keys: {sorted(missing_keys)}. "
-                f"observation_space defines: {sorted(obs_space_keys)}, "
-                f"but observation returned: {sorted(obs_keys)}"
-            )
+        # Self-check in debug mode: Verify all observation_space keys are present
+        if self.debug_state_warnings:
+            obs_space_keys = set(self.observation_space.spaces.keys())
+            obs_keys = set(obs_dict.keys())
+            missing_keys = obs_space_keys - obs_keys
+            if missing_keys:
+                raise KeyError(
+                    f"_get_observation() missing required keys: {sorted(missing_keys)}. "
+                    f"observation_space defines: {sorted(obs_space_keys)}, "
+                    f"but observation returned: {sorted(obs_keys)}"
+                )
         
         return obs_dict
 
