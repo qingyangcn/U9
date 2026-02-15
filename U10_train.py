@@ -142,7 +142,7 @@ def make_env(
     env = EventDrivenSingleUAVWrapper(
         env,
         max_skip_steps=max_skip_steps,
-        local_observation=True,  # full observation with current_drone_id
+        local_observation=False,  # Return full observation with current_drone_id
     )
 
     return env
