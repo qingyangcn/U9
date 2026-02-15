@@ -14,6 +14,13 @@ This enables:
 - Homogeneous policy parameter sharing across drones
 - Action space independent of number of drones N
 - Event-driven decision making (only act when needed)
+
+IMPORTANT - Episode Length Behavior:
+- The base environment runs for exactly (end_hour - start_hour) * steps_per_hour = 192 steps
+- Each wrapper.step() may advance the environment by 1 or more steps (due to skipping when no decisions)
+- Therefore: wrapper_episode_length < env_episode_length (e.g., ~90-140 wrapper steps for 192 env steps)
+- Use info['total_env_steps'] to track actual environment time steps
+- SB3 metrics (ep_len_mean) report wrapper steps, not env steps
 """
 
 import numpy as np
@@ -31,6 +38,14 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
     1. Maintaining a decision queue of drones at decision points
     2. Each step() call processes one drone from the queue
     3. When queue is empty, advances the underlying environment
+
+    Episode Length Tracking:
+    - Base environment runs for exactly (end_hour - start_hour) * steps_per_hour steps
+    - Each wrapper step may advance env by 1+ steps (due to skip logic)
+    - wrapper_episode_length < env_episode_length (typically ~50-75% of env steps)
+    - info['env_steps'] = steps advanced in this wrapper step
+    - info['total_env_steps'] = total environment steps since reset
+    - SB3 ep_len_mean reports wrapper steps, not env steps
 
     Args:
         env: The base UAV environment
