@@ -1,7 +1,22 @@
 """
-U10 PPO Training with MOPSO Candidate Generation + Event-Driven Single UAV Wrapper
+U10 PPO Training with MOPSO Candidate Generation + Event-Driven Execution
 
-This script implements a hierarchical decision-making system for UAV delivery:
+This script implements a hierarchical decision-making system for UAV delivery with
+two training modes:
+
+1. EVENT_DRIVEN_SHARED_POLICY (Default - CTDE):
+   - Centralized Training, Decentralized Execution
+   - Trains a single shared policy that each drone can use independently
+   - Action space: Discrete(5) - single rule_id
+   - Observation: Local observation (drone_state, candidates, global_context)
+   - Enables true decentralized execution during deployment
+   - Each drone makes independent decisions using shared policy weights
+
+2. CENTRAL_QUEUE (Legacy):
+   - Centralized queue-based decision making
+   - Action space: Discrete(5) - single rule_id for current drone
+   - Observation: Full observation with current_drone_id
+   - Processes drones one by one through central queue
 
 UPPER LAYER (Candidate Generation):
 - Uses MOPSOCandidateGenerator to generate candidate order sets for each drone
@@ -10,8 +25,8 @@ UPPER LAYER (Candidate Generation):
 - Candidate generation uses multi-objective optimization to suggest promising orders
 
 LOWER LAYER (Rule Selection):
-- Uses EventDrivenSingleUAVWrapper for event-driven decision making
-- Action space: Discrete(5) - single rule_id for one drone at a time
+- Uses wrapper for event-driven decision making
+- Action space: Discrete(5) - single rule_id
 - Rules select orders from the filtered candidate sets
 - Actual order assignment (READY -> ASSIGNED) happens via env.apply_rule_to_drone
 - Wrapper automatically advances time when no decisions are needed
@@ -27,8 +42,14 @@ Training:
 - Checkpointing: Model and VecNormalize stats saved periodically
 
 Usage:
+    # Train with event-driven shared policy (CTDE - default)
     python U10_train.py --total-steps 200000 --seed 42 --num-drones 20 --candidate-k 20
-    python U10_train.py --total-steps 1000  # Quick test run
+    
+    # Train with legacy central queue mode
+    python U10_train.py --training-mode central_queue --total-steps 200000
+    
+    # Quick test run
+    python U10_train.py --total-steps 1000
 """
 
 from __future__ import annotations
@@ -47,6 +68,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from UAV_ENVIRONMENT_10 import ThreeObjectiveDroneDeliveryEnv
 from U10_candidate_generator import MOPSOCandidateGenerator
 from U10_event_driven_single_uav_wrapper import EventDrivenSingleUAVWrapper
+from U10_single_uav_training_wrapper import SingleUAVTrainingWrapper
 
 
 def make_env(
@@ -69,6 +91,8 @@ def make_env(
         battery_return_threshold: float,
         enable_diagnostics: bool,
         diagnostics_interval: int,
+        training_mode: str = 'event_driven_shared_policy',
+        drone_sampling: str = 'random',
 ) -> gym.Env:
     """
     Create U10 environment with MOPSO candidate generation and event-driven wrapper.
@@ -93,6 +117,8 @@ def make_env(
         battery_return_threshold: Battery threshold for return
         enable_diagnostics: Enable diagnostics
         diagnostics_interval: Diagnostics print interval
+        training_mode: Training mode ('event_driven_shared_policy' or 'central_queue')
+        drone_sampling: Drone sampling strategy ('random' or 'round_robin')
 
     Returns:
         Wrapped environment ready for training
@@ -138,12 +164,33 @@ def make_env(
     # Bind candidate generator to environment
     env.set_candidate_generator(candidate_generator)
 
-    # Wrap with event-driven single UAV wrapper
-    env = EventDrivenSingleUAVWrapper(
-        env,
-        max_skip_steps=max_skip_steps,
-        local_observation=True,  # full observation with current_drone_id
-    )
+    # Wrap based on training mode
+    if training_mode == 'event_driven_shared_policy':
+        # NEW MODE: Single UAV training wrapper for shared policy
+        # - Action space: Discrete(5)
+        # - Observation: Local observation (drone_state, candidates, global_context)
+        # - Enables decentralized execution during deployment
+        env = SingleUAVTrainingWrapper(
+            env,
+            max_skip_steps=max_skip_steps,
+            drone_sampling=drone_sampling,
+            local_obs_only=False,
+        )
+    elif training_mode == 'central_queue':
+        # LEGACY MODE: Event-driven single UAV wrapper (centralized queue)
+        # - Action space: Discrete(5)
+        # - Observation: Full observation with current_drone_id
+        # - Uses central queue for decision making
+        env = EventDrivenSingleUAVWrapper(
+            env,
+            max_skip_steps=max_skip_steps,
+            local_observation=True,
+        )
+    else:
+        raise ValueError(
+            f"Unknown training_mode: {training_mode}. "
+            f"Must be 'event_driven_shared_policy' or 'central_queue'"
+        )
 
     return env
 
@@ -186,6 +233,8 @@ def train(args):
             battery_return_threshold=args.battery_return_threshold,
             enable_diagnostics=args.enable_diagnostics,
             diagnostics_interval=args.diagnostics_interval,
+            training_mode=args.training_mode,
+            drone_sampling=args.drone_sampling,
         )
 
     # Create vectorized environment
@@ -215,6 +264,10 @@ def train(args):
     print("=" * 80)
     print("U10 PPO Training: MOPSO Candidate Generation + Event-Driven Single UAV")
     print("=" * 80)
+    print(f"Training Mode: {args.training_mode}")
+    if args.training_mode == 'event_driven_shared_policy':
+        print(f"  → Shared Policy for Decentralized Execution (CTDE)")
+        print(f"  → Drone Sampling: {args.drone_sampling}")
     print(f"Environment: UAV_ENVIRONMENT_10.ThreeObjectiveDroneDeliveryEnv")
     print(f"  num_drones={args.num_drones}, obs_max_orders={args.obs_max_orders}")
     print(f"  top_k_merchants={args.top_k_merchants}, candidate_k={args.candidate_k}")
@@ -226,7 +279,10 @@ def train(args):
     print(f"  max_orders={args.mopso_max_orders}, max_per_drone={args.mopso_max_orders_per_drone}")
     print(f"  Note: MOPSO only generates candidates, does NOT commit READY->ASSIGNED")
     print(f"\nLower Layer (Rule Selection):")
-    print(f"  Wrapper: EventDrivenSingleUAVWrapper")
+    if args.training_mode == 'event_driven_shared_policy':
+        print(f"  Wrapper: SingleUAVTrainingWrapper")
+    else:
+        print(f"  Wrapper: EventDrivenSingleUAVWrapper")
     print(f"  Action space: Discrete({args.rule_count})")
     print(f"  max_skip_steps={args.max_skip_steps}")
     print(f"\nTraining:")
@@ -300,6 +356,14 @@ def main():
                         help="Total training steps (default: 200000)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed (default: 42)")
+    parser.add_argument("--training-mode", type=str, 
+                        default='event_driven_shared_policy',
+                        choices=['event_driven_shared_policy', 'central_queue'],
+                        help="Training mode: event_driven_shared_policy (CTDE, default) or central_queue (legacy)")
+    parser.add_argument("--drone-sampling", type=str,
+                        default='random',
+                        choices=['random', 'round_robin'],
+                        help="Drone sampling strategy for training (default: random)")
 
     # Environment parameters
     parser.add_argument("--num-drones", type=int, default=20,
