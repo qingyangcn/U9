@@ -1721,7 +1721,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self._last_decision_points_count = 0
 
         obs = self._get_observation()
-        obs['objective_weights'] = self.objective_weights.copy()
         info = self._get_info()
 
         print(f"=== 开始 ===")
@@ -1835,7 +1834,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             raise ValueError(f"Unknown reward_output_mode={self.reward_output_mode}")
 
         obs = self._get_observation()
-        obs['objective_weights'] = self.objective_weights.copy()
 
         info = self._get_info()
         info['r_vec'] = r_vec.copy()
@@ -4223,7 +4221,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                 candidates_obs[drone_id, i] = self._encode_candidate(order_id, is_valid)
         candidates_obs = np.clip(candidates_obs, 0.0, 1.0).astype(np.float32)
 
-        return {
+        obs = {
             'orders': order_obs,
             'drones': drone_obs,
             'merchants': merchant_obs,
@@ -4235,8 +4233,24 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'day_progress': np.array([time_state['progress']], dtype=np.float32),
             'resource_saturation': np.array([self._calculate_resource_saturation()], dtype=np.float32),
             'order_pattern': order_pattern,
-            'pareto_info': pareto_info
+            'pareto_info': pareto_info,
+            'objective_weights': self.objective_weights.copy(),
         }
+
+        # Validate observation keys match observation_space keys
+        obs_keys = set(obs.keys())
+        space_keys = set(self.observation_space.spaces.keys())
+        if obs_keys != space_keys:
+            missing_in_obs = space_keys - obs_keys
+            extra_in_obs = obs_keys - space_keys
+            error_msg = "Observation keys mismatch with observation_space!"
+            if missing_in_obs:
+                error_msg += f"\n  Missing in obs: {missing_in_obs}"
+            if extra_in_obs:
+                error_msg += f"\n  Extra in obs: {extra_in_obs}"
+            raise ValueError(error_msg)
+
+        return obs
 
     def _encode_order(self, order):
         encoding = np.zeros(10, dtype=np.float32)

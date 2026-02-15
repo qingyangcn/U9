@@ -14,6 +14,13 @@ This enables:
 - Homogeneous policy parameter sharing across drones
 - Action space independent of number of drones N
 - Event-driven decision making (only act when needed)
+
+IMPORTANT - Episode Length Behavior:
+- The base environment runs for exactly (end_hour - start_hour) * steps_per_hour = 192 steps
+- Each wrapper.step() may advance the environment by 1 or more steps (due to skipping when no decisions)
+- Therefore: wrapper_episode_length < env_episode_length (e.g., ~90-140 wrapper steps for 192 env steps)
+- Use info['total_env_steps'] to track actual environment time steps
+- SB3 metrics (ep_len_mean) report wrapper steps, not env steps
 """
 
 import numpy as np
@@ -31,6 +38,14 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
     1. Maintaining a decision queue of drones at decision points
     2. Each step() call processes one drone from the queue
     3. When queue is empty, advances the underlying environment
+
+    Episode Length Tracking:
+    - Base environment runs for exactly (end_hour - start_hour) * steps_per_hour steps
+    - Each wrapper step may advance env by 1+ steps (due to skip logic)
+    - wrapper_episode_length < env_episode_length (typically ~50-75% of env steps)
+    - info['env_steps'] = steps advanced in this wrapper step
+    - info['total_env_steps'] = total environment steps since reset
+    - SB3 ep_len_mean reports wrapper steps, not env steps
 
     Args:
         env: The base UAV environment
@@ -74,6 +89,7 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
         # Statistics
         self.total_decisions = 0
         self.total_skips = 0
+        self.total_env_steps = 0  # Track actual environment steps
 
         # Override observation space
         if self.local_observation:
@@ -81,9 +97,13 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
             # For now, keep original observation space
             pass
         else:
-            # Add current_drone_id to observation
-            # Keep original observation space, will add field in observation dict
-            pass
+            # Add current_drone_id to observation space
+            # Create new Dict space with all original keys plus current_drone_id
+            original_spaces = dict(self.env.observation_space.spaces)
+            original_spaces['current_drone_id'] = spaces.Box(
+                low=-1, high=env.unwrapped.num_drones, shape=(1,), dtype=np.int32
+            )
+            self.observation_space = spaces.Dict(original_spaces)
 
     def reset(self, **kwargs) -> Tuple[Dict, Dict]:
         """
@@ -109,6 +129,7 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
         # Reset statistics
         self.total_decisions = 0
         self.total_skips = 0
+        self.total_env_steps = 0
 
         # Get first observation
         obs_out, info_out = self._get_current_observation()
@@ -129,13 +150,19 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
             truncated: Whether episode truncated
             info: Info dictionary
         """
+        # Track number of environment steps taken in this wrapper step
+        env_steps_this_call = 0
+
         # If no current drone, populate queue first
         if self.current_drone_id is None:
             self._populate_decision_queue()
 
             # If still no drones, skip environment forward
             if not self.decision_queue:
-                obs, reward, terminated, truncated, info = self._skip_to_next_decision()
+                obs, reward, terminated, truncated, info, steps_taken = self._skip_to_next_decision()
+                env_steps_this_call += steps_taken
+                info['env_steps'] = env_steps_this_call
+                info['total_env_steps'] = self.total_env_steps
                 return obs, reward, terminated, truncated, info
 
         # Apply action to current drone
@@ -155,6 +182,8 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
         # Use a dummy action (all zeros) to just advance time
         dummy_action = np.zeros(self.env.unwrapped.num_drones, dtype=np.int32)
         obs, reward, terminated, truncated, info = self.env.step(dummy_action)
+        env_steps_this_call += 1
+        self.total_env_steps += 1
 
         # Store observation
         self.last_obs = obs
@@ -169,13 +198,18 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
 
         # If no more drones in queue and episode not done, skip forward
         if not self.decision_queue and not (terminated or truncated):
-            obs, reward, terminated, truncated, info = self._skip_to_next_decision()
+            obs, skip_reward, terminated, truncated, skip_info, steps_taken = self._skip_to_next_decision()
+            reward += skip_reward
+            info.update(skip_info)
+            env_steps_this_call += steps_taken
 
         # Get observation for next drone
         obs_out, info_out = self._get_current_observation()
 
         # Merge info
         info_out.update(info)
+        info_out['env_steps'] = env_steps_this_call
+        info_out['total_env_steps'] = self.total_env_steps
 
         return obs_out, reward, terminated, truncated, info_out
 
@@ -203,22 +237,25 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
         else:
             self.current_drone_id = None
 
-    def _skip_to_next_decision(self) -> Tuple[Dict, float, bool, bool, Dict]:
+    def _skip_to_next_decision(self) -> Tuple[Dict, float, bool, bool, Dict, int]:
         """
         Skip forward in the environment until a decision point appears
         or max_skip_steps is reached or episode ends.
 
         Returns:
-            observation, reward, terminated, truncated, info
+            observation, reward, terminated, truncated, info, steps_taken
         """
         total_reward = 0.0
         terminated = False
         truncated = False
+        steps_taken = 0
 
         for skip_step in range(self.max_skip_steps):
             # Advance environment with no-op actions
             dummy_action = np.zeros(self.env.unwrapped.num_drones, dtype=np.int32)
             obs, reward, terminated, truncated, info = self.env.step(dummy_action)
+            steps_taken += 1
+            self.total_env_steps += 1
 
             # Accumulate reward
             total_reward += reward
@@ -244,7 +281,7 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
                     self.current_drone_id = self.decision_queue.popleft()
                 break
 
-        return self.last_obs, total_reward, terminated, truncated, self.last_info
+        return self.last_obs, total_reward, terminated, truncated, self.last_info, steps_taken
 
     def _get_current_observation(self) -> Tuple[Dict, Dict]:
         """
@@ -255,8 +292,14 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
             info: Info dict with metadata
         """
         if self.last_obs is None:
-            # No observation yet, return empty
-            return {}, {}
+            # No observation yet, should not happen after reset
+            raise RuntimeError(
+                "_get_current_observation called but last_obs is None. "
+                "This indicates a wrapper state inconsistency. "
+                "Ensure that reset() was called before step(). "
+                "If reset() was called, check that the base environment's reset() "
+                "returned a valid observation."
+            )
 
         obs = self.last_obs.copy()
         info = self.last_info.copy() if self.last_info else {}
@@ -269,6 +312,19 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
             # Add current_drone_id to observation for context
             obs['current_drone_id'] = np.array([self.current_drone_id if self.current_drone_id is not None else -1],
                                                dtype=np.int32)
+
+        # Validate observation keys match observation_space
+        obs_keys = set(obs.keys())
+        space_keys = set(self.observation_space.spaces.keys())
+        if obs_keys != space_keys:
+            missing_in_obs = space_keys - obs_keys
+            extra_in_obs = obs_keys - space_keys
+            error_msg = f"Wrapper observation keys mismatch!"
+            if missing_in_obs:
+                error_msg += f"\n  Missing in obs: {missing_in_obs}"
+            if extra_in_obs:
+                error_msg += f"\n  Extra in obs: {extra_in_obs}"
+            raise ValueError(error_msg)
 
         # Add decision queue info to metadata
         info['decision_queue_length'] = len(self.decision_queue)
@@ -334,6 +390,7 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
         return {
             'total_decisions': self.total_decisions,
             'total_skips': self.total_skips,
+            'total_env_steps': self.total_env_steps,
             'queue_length': len(self.decision_queue),
             'current_drone_id': self.current_drone_id,
         }
