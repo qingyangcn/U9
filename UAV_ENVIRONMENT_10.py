@@ -1297,7 +1297,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.order_history = []
         self.weather_history = []
         self.pareto_history = []
-        self.air_traffic = np.zeros((self.grid_size, self.grid_size))
         self.weather = WeatherType.SUNNY
         self.weather_details = {}
 
@@ -1448,7 +1447,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'time': spaces.Box(low=0, high=1, shape=(5,), dtype=np.float32),
             'day_progress': spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32),
             'resource_saturation': spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32),
-            'air_traffic': spaces.Box(low=0, high=1, shape=(self.grid_size, self.grid_size), dtype=np.float32),
             'order_pattern': spaces.Box(low=0, high=1, shape=(24,), dtype=np.float32),
             'pareto_info': spaces.Box(low=0, high=1, shape=(self.num_objectives + 2,), dtype=np.float32),
             'objective_weights': spaces.Box(low=0, high=1, shape=(self.num_objectives,), dtype=np.float32),
@@ -1683,7 +1681,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         }
 
         self.path_visualizer.clear_paths()
-        self.air_traffic = np.zeros((self.grid_size, self.grid_size))
 
         self._update_weather_from_dataset()
         self._generate_morning_orders()
@@ -3024,7 +3021,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self._update_drone_positions()
         if self.enable_random_events:
             self._handle_random_events()
-        self._update_air_traffic()
 
         # Task B: State consistency checking with categorized debug logging
         consistency_issues = self.state_manager.get_state_consistency_check()
@@ -3895,26 +3891,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             if drone['status'] == DroneStatus.FLYING_TO_CUSTOMER:
                 drone['target_location'] = new_customer_location
 
-    # ------------------ air traffic / weather ------------------
+    # ------------------  weather ------------------
 
-    def _update_air_traffic(self):
-        self.air_traffic = np.zeros((self.grid_size, self.grid_size))
 
-        for drone_id, drone in self.drones.items():
-            if drone['status'] not in [DroneStatus.IDLE, DroneStatus.CHARGING]:
-                x, y = drone['location']
-                x_int = int(x)
-                y_int = int(y)
-                if 0 <= x_int < self.grid_size and 0 <= y_int < self.grid_size:
-                    self.air_traffic[x_int, y_int] += 0.3
-
-                    for dx in [-1, 0, 1]:
-                        for dy in [-1, 0, 1]:
-                            nx, ny = x_int + dx, y_int + dy
-                            if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
-                                self.air_traffic[nx, ny] += 0.1
-
-        self.air_traffic = np.clip(self.air_traffic, 0, 1)
 
     def _update_weather_from_dataset(self):
         """用 step 做索引（全局）"""
@@ -4232,7 +4211,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         order_obs = np.clip(order_obs, 0.0, 1.0).astype(np.float32)
         drone_obs = np.clip(drone_obs, 0.0, 1.0).astype(np.float32)
         base_obs = np.clip(base_obs, 0.0, 1.0).astype(np.float32)
-        air_traffic = np.clip(self.air_traffic, 0.0, 1.0).astype(np.float32)
 
         # U7: Build candidate observations
         candidates_obs = np.zeros((self.num_drones, self.num_candidates, 12), dtype=np.float32)
@@ -4256,7 +4234,6 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'time': time_obs,
             'day_progress': np.array([time_state['progress']], dtype=np.float32),
             'resource_saturation': np.array([self._calculate_resource_saturation()], dtype=np.float32),
-            'air_traffic': air_traffic,
             'order_pattern': order_pattern,
             'pareto_info': pareto_info
         }
