@@ -293,7 +293,13 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
         """
         if self.last_obs is None:
             # No observation yet, should not happen after reset
-            raise RuntimeError("_get_current_observation called but last_obs is None. This should not happen after reset().")
+            raise RuntimeError(
+                "_get_current_observation called but last_obs is None. "
+                "This indicates a wrapper state inconsistency. "
+                "Ensure that reset() was called before step(). "
+                "If reset() was called, check that the base environment's reset() "
+                "returned a valid observation."
+            )
 
         obs = self.last_obs.copy()
         info = self.last_info.copy() if self.last_info else {}

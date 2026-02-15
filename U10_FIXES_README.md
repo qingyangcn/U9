@@ -2,10 +2,10 @@
 
 This document describes the fixes applied to resolve training issues with U10_train.py.
 
-## Problem 1: KeyError: 'bases' during VecNormalize reset
+## Problem 1: Missing observation keys during VecNormalize reset
 
 ### Root Cause
-The observation dict returned by `_get_observation()` was missing the `'objective_weights'` key that was declared in `observation_space`. The key was added **after** calling `_get_observation()` in both `reset()` and `step()`, but this caused issues with the VecNormalize wrapper which validates observation structure during reset.
+The observation dict returned by `_get_observation()` was missing the `'objective_weights'` key that was declared in `observation_space`. While the problem statement mentioned KeyError: 'bases', the actual issue was that `'objective_weights'` was not included in the observation dict returned by `_get_observation()`. The key was added **after** calling `_get_observation()` in both `reset()` and `step()`, but this caused issues with the VecNormalize wrapper which validates observation structure during reset.
 
 ### Solution
 1. Added `'objective_weights'` directly to the dict returned by `_get_observation()`
