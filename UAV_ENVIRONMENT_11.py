@@ -4725,6 +4725,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'rule_id': rule_id,
             'success': False,
             'failure_reason': None,
+            'order_id': None,
         }
 
         if drone_id < 0 or drone_id >= self.num_drones:
@@ -4745,6 +4746,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         if order_id is None or order_id not in self.orders:
             self.last_decision_info['failure_reason'] = 'no_order_selected'
             return False
+
+        # Record selected order_id
+        self.last_decision_info['order_id'] = order_id
 
         order = self.orders[order_id]
 
@@ -4826,3 +4830,26 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             self.last_decision_info['failure_reason'] = None  # Success, no failure
 
         return state_changed
+
+    def apply_rule_to_drone_with_info(self, drone_id: int, rule_id: int) -> Tuple[bool, Dict]:
+        """
+        Apply a rule to a specific drone, returning both success flag and detailed info.
+
+        This is a convenience wrapper around apply_rule_to_drone that also returns
+        the decision info dict, avoiding the need to separately read last_decision_info.
+
+        Args:
+            drone_id: The drone to apply the rule to
+            rule_id: The rule ID (0-4) to apply
+
+        Returns:
+            Tuple of (success: bool, info: dict) where info contains:
+                - drone_id: int
+                - rule_id: int
+                - success: bool
+                - failure_reason: str or None (None on success)
+                - order_id: int or None (selected order id, if any)
+        """
+        success = self.apply_rule_to_drone(drone_id, rule_id)
+        info = dict(self.last_decision_info)
+        return success, info

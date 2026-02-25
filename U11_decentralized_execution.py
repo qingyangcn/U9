@@ -68,9 +68,17 @@ class DecentralizedEventDrivenExecutor:
         self.failed_decisions = 0
         self.decision_failures_by_reason = {}
 
+        # Fine-grained statistics
+        self.actionable_decisions = 0       # rule selected an order, produced a commit attempt
+        self.noop_or_not_eligible = 0       # no candidates, drone busy/full, not at decision point
+        self.commit_fail_by_reason = {}     # commit attempts that failed, keyed by reason
+
         # Episode state
         self.episode_active = False
         self.cumulative_reward = 0.0
+
+        # Cached last observation (updated after every env.reset/step)
+        self._last_obs = None
 
     def reset(self, **kwargs) -> Tuple[Dict, Dict]:
         """
@@ -82,6 +90,9 @@ class DecentralizedEventDrivenExecutor:
         """
         obs, info = self.env.reset(**kwargs)
 
+        # Cache observation for local obs extraction
+        self._last_obs = obs
+
         # Reset statistics
         self.total_decisions = 0
         self.total_decision_rounds = 0
@@ -89,6 +100,9 @@ class DecentralizedEventDrivenExecutor:
         self.successful_decisions = 0
         self.failed_decisions = 0
         self.decision_failures_by_reason = {}
+        self.actionable_decisions = 0
+        self.noop_or_not_eligible = 0
+        self.commit_fail_by_reason = {}
         self.cumulative_reward = 0.0
         self.episode_active = True
 
@@ -193,25 +207,47 @@ class DecentralizedEventDrivenExecutor:
             # Call policy to get rule_id
             rule_id = self.policy_fn(local_obs)
 
-            # Submit to centralized arbitrator
-            success = self.unwrapped_env.apply_rule_to_drone(drone_id, rule_id)
+            # Submit to centralized arbitrator (use with_info if available)
+            if hasattr(self.unwrapped_env, 'apply_rule_to_drone_with_info'):
+                success, decision_info = self.unwrapped_env.apply_rule_to_drone_with_info(
+                    drone_id, rule_id
+                )
+                reason = decision_info.get('failure_reason') or 'unknown'
+                order_id = decision_info.get('order_id')
+            else:
+                success = self.unwrapped_env.apply_rule_to_drone(drone_id, rule_id)
+                reason = 'unknown'
+                order_id = None
+
+            # Noop / not-eligible reasons: no candidates, drone full, not at decision point
+            _noop_reasons = {'no_order_selected', 'drone_at_capacity', 'not_at_decision_point',
+                             'invalid_drone_id'}
 
             # Track result
             if success:
                 self.successful_decisions += 1
+                self.actionable_decisions += 1
                 decision_result = "SUCCESS"
             else:
                 self.failed_decisions += 1
-                decision_result = "FAILED"
-                # Track failure reason (if available in future)
-                reason = "unknown"
+                if reason in _noop_reasons:
+                    self.noop_or_not_eligible += 1
+                else:
+                    # Actionable but commit failed
+                    self.actionable_decisions += 1
+                    self.commit_fail_by_reason[reason] = \
+                        self.commit_fail_by_reason.get(reason, 0) + 1
+                # Legacy failure reason tracking
                 self.decision_failures_by_reason[reason] = \
                     self.decision_failures_by_reason.get(reason, 0) + 1
+                decision_result = f"FAILED({reason})"
 
             round_decisions.append({
                 'drone_id': drone_id,
                 'rule_id': rule_id,
-                'success': success
+                'success': success,
+                'order_id': order_id,
+                'reason': reason if not success else None,
             })
 
             if self.verbose:
@@ -221,6 +257,7 @@ class DecentralizedEventDrivenExecutor:
         # Use dummy action (all zeros) to just advance time
         dummy_action = np.zeros(self.unwrapped_env.num_drones, dtype=np.int32)
         obs, reward, terminated, truncated, info = self.env.step(dummy_action)
+        self._last_obs = obs
 
         # Add decision round info
         info['decision_round'] = {
@@ -248,6 +285,7 @@ class DecentralizedEventDrivenExecutor:
             # Advance environment with no-op
             dummy_action = np.zeros(self.unwrapped_env.num_drones, dtype=np.int32)
             obs, reward, terminated, truncated, info = self.env.step(dummy_action)
+            self._last_obs = obs
 
             total_reward += reward
             self.total_skip_steps += 1
@@ -276,18 +314,22 @@ class DecentralizedEventDrivenExecutor:
         """
         Get current observation from environment.
 
+        Prefers the internally cached observation updated after every env.reset/step,
+        falling back to calling the environment's observation method directly.
+
         Returns:
             Current observation dict
         """
-        # Access the current observation from environment
-        # This assumes the environment stores its last observation
-        if hasattr(self.unwrapped_env, 'last_obs'):
-            return self.unwrapped_env.last_obs
-        elif hasattr(self.unwrapped_env, '_get_obs'):
+        if self._last_obs is not None:
+            return self._last_obs
+        # Fallback: call observation method directly on unwrapped env
+        if hasattr(self.unwrapped_env, '_get_obs'):
             return self.unwrapped_env._get_obs()
-        else:
-            # Fallback: call observation method directly
+        elif hasattr(self.unwrapped_env, '_get_observation'):
             return self.unwrapped_env._get_observation()
+        elif hasattr(self.unwrapped_env, 'last_obs'):
+            return self.unwrapped_env.last_obs
+        raise RuntimeError("Cannot obtain current observation from environment.")
 
     def _extract_local_observation(self, full_obs: Dict, drone_id: int) -> Dict:
         """
@@ -332,7 +374,14 @@ class DecentralizedEventDrivenExecutor:
         Get execution statistics.
 
         Returns:
-            Dictionary with statistics
+            Dictionary with statistics including fine-grained decision metrics:
+            - decision_rounds: number of rounds where at least one drone decided
+            - individual_decisions: total per-drone decision calls
+            - actionable_decisions: decisions that selected an order (commit attempted)
+            - noop_or_not_eligible: decisions with no candidates / drone full / not eligible
+            - commit_success: successful commit count (= successful_decisions)
+            - commit_fail_by_reason: dict of reason -> count for failed commit attempts
+            - failure_reasons: legacy dict (same as decision_failures_by_reason)
         """
         return {
             'total_decisions': self.total_decisions,
@@ -345,6 +394,13 @@ class DecentralizedEventDrivenExecutor:
             ),
             'failure_reasons': dict(self.decision_failures_by_reason),
             'cumulative_reward': self.cumulative_reward,
+            # Fine-grained metrics
+            'decision_rounds': self.total_decision_rounds,
+            'individual_decisions': self.total_decisions,
+            'actionable_decisions': self.actionable_decisions,
+            'noop_or_not_eligible': self.noop_or_not_eligible,
+            'commit_success': self.successful_decisions,
+            'commit_fail_by_reason': dict(self.commit_fail_by_reason),
         }
 
     def run_episode(self, max_steps: int = 10000) -> Dict[str, Any]:

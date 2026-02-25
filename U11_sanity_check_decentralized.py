@@ -150,17 +150,25 @@ def run_sanity_check(args):
     print(f"\nPolicy: {policy_name}")
     print(f"Environment: {args.num_drones} drones, {args.candidate_k} candidates/drone")
     print(f"\nExecution Statistics:")
-    print(f"  Total Decision Rounds: {stats['total_decision_rounds']}")
-    print(f"  Total Individual Decisions: {stats['total_decisions']}")
-    print(f"  Successful Decisions: {stats['successful_decisions']}")
-    print(f"  Failed Decisions: {stats['failed_decisions']}")
-    print(f"  Success Rate: {stats['success_rate']:.2%}")
-    print(f"  Total Skip Steps: {stats['total_skip_steps']}")
-    print(f"  Cumulative Reward: {stats['cumulative_reward']:.2f}")
+    print(f"  Decision Rounds:          {stats['decision_rounds']}")
+    print(f"  Individual Decisions:     {stats['individual_decisions']}")
+    print(f"  Actionable Decisions:     {stats['actionable_decisions']}  (order selected, commit attempted)")
+    print(f"  Noop / Not Eligible:      {stats['noop_or_not_eligible']}  (no candidates, drone full, etc.)")
+    print(f"  Commit Success:           {stats['commit_success']}")
+    print(f"  Commit Fail (total):      {stats['failed_decisions'] - stats['noop_or_not_eligible']}")
+    print(f"  Overall Success Rate:     {stats['success_rate']:.2%}  (commit_success / individual_decisions)")
+    print(f"  Total Skip Steps:         {stats['total_skip_steps']}")
+    print(f"  Cumulative Reward:        {stats['cumulative_reward']:.2f}")
 
-    if stats['failure_reasons']:
-        print(f"\nFailure Reasons:")
-        for reason, count in stats['failure_reasons'].items():
+    if stats['commit_fail_by_reason']:
+        print(f"\nCommit Failure Reasons:")
+        for reason, count in sorted(stats['commit_fail_by_reason'].items(),
+                                    key=lambda x: -x[1]):
+            print(f"  {reason}: {count}")
+    elif stats['failure_reasons']:
+        print(f"\nFailure Reasons (legacy):")
+        for reason, count in sorted(stats['failure_reasons'].items(),
+                                    key=lambda x: -x[1]):
             print(f"  {reason}: {count}")
 
     print("\n" + "=" * 80)
