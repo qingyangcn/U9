@@ -1,5 +1,5 @@
 """
-U10 Sanity Check for Decentralized Event-Driven Execution
+U11 Sanity Check for Decentralized Event-Driven Execution
 
 This script validates the decentralized event-driven execution system by:
 1. Running a small episode with random policy
@@ -26,7 +26,7 @@ import numpy as np
 # Add repo root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from UAV_ENVIRONMENT_10 import ThreeObjectiveDroneDeliveryEnv
+from UAV_ENVIRONMENT_11 import ThreeObjectiveDroneDeliveryEnv
 from U10_candidate_generator import MOPSOCandidateGenerator
 from U11_decentralized_execution import DecentralizedEventDrivenExecutor
 
@@ -109,9 +109,9 @@ def run_sanity_check(args):
     print("Creating MOPSO candidate generator...")
     candidate_generator = MOPSOCandidateGenerator(
         candidate_k=args.candidate_k,
-        n_particles=20,
-        n_iterations=5,
-        max_orders=100,
+        n_particles=30,
+        n_iterations=10,
+        max_orders=200,
         max_orders_per_drone=10,
         seed=args.seed,
     )
@@ -186,15 +186,15 @@ def run_sanity_check(args):
 def main():
     """Parse arguments and run sanity check."""
     parser = argparse.ArgumentParser(
-        description="U10 Decentralized Execution Sanity Check"
+        description="U11 Decentralized Execution Sanity Check"
     )
 
     # Environment parameters
-    parser.add_argument("--num-drones", type=int, default=10,
+    parser.add_argument("--num-drones", type=int, default=20,
                         help="Number of drones (default: 10)")
-    parser.add_argument("--obs-max-orders", type=int, default=200,
+    parser.add_argument("--obs-max-orders", type=int, default=400,
                         help="Maximum orders in observation (default: 200)")
-    parser.add_argument("--top-k-merchants", type=int, default=50,
+    parser.add_argument("--top-k-merchants", type=int, default=100,
                         help="Top K merchants (default: 50)")
     parser.add_argument("--candidate-k", type=int, default=20,
                         help="Number of candidates per drone (default: 20)")
@@ -202,15 +202,15 @@ def main():
                         help="Enable random events (default: False)")
 
     # Executor parameters
-    parser.add_argument("--max-skip-steps", type=int, default=10,
+    parser.add_argument("--max-skip-steps", type=int, default=1,
                         help="Max steps to skip when waiting for decisions (default: 10)")
     parser.add_argument("--max-steps", type=int, default=500,
                         help="Maximum decision steps per episode (default: 500)")
 
     # Policy parameters
-    parser.add_argument("--model-path", type=str, default=None,
+    parser.add_argument("--model-path", type=str, default='ppo_u11_final.zip',
                         help="Path to trained model (.zip file) - if not provided, uses random policy")
-    parser.add_argument("--vecnormalize-path", type=str, default=None,
+    parser.add_argument("--vecnormalize-path", type=str, default='vecnormalize_u11_final.pkl',
                         help="Path to VecNormalize stats (.pkl file)")
 
     # Other parameters
