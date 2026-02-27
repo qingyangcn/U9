@@ -1109,6 +1109,8 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                  energy_e0: float = 0.1,  # Base energy consumption per unit distance (battery_units/distance_unit)
                  energy_alpha: float = 0.5,  # Load coefficient for energy consumption
                  battery_return_threshold: float = 10.0,  # Low battery threshold for forced return (battery_units)
+                 # ===== Order cutoff: stop accepting new orders K steps before business end =====
+                 order_cutoff_steps: int = 0,  # 0 = no cutoff (default, preserves original behavior)
                  ):
         super().__init__()
 
@@ -1192,6 +1194,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.energy_e0 = float(energy_e0)  # Base energy per distance
         self.energy_alpha = float(energy_alpha)  # Load coefficient
         self.battery_return_threshold = float(battery_return_threshold)  # Low battery threshold
+
+        # ========== Order cutoff: stop accepting new orders K steps before end ==========
+        self.order_cutoff_steps = int(order_cutoff_steps)
 
         # ========== shaping 参数 ==========
         self.shaping_progress_k = float(shaping_progress_k)
@@ -3962,10 +3967,20 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
     # ------------------ order generation ------------------
 
+    def _get_business_end_step(self) -> int:
+        """Return the step index at which business hours end (= steps_per_day)."""
+        return self.time_system.steps_per_day
+
     def _generate_new_orders(self):
         time_state = self.time_system.get_time_state()
         if not time_state['is_business_hours']:
             return
+
+        # Order cutoff: stop generating new orders K steps before business end
+        if self.order_cutoff_steps > 0:
+            business_end_step = self._get_business_end_step()
+            if self.time_system.current_step >= business_end_step - self.order_cutoff_steps:
+                return
 
         order_prob = self.order_processor.get_order_probability(
             env_time=self.time_system.current_step,
@@ -4140,6 +4155,42 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
         print(f"  未完成订单: {len(unfinished_orders)} 已取消")
         print("=== 当日营业结束 ===\n")
+
+    def get_completion_stats(self) -> dict:
+        """Return general and serviceable completion statistics for the current episode.
+
+        - general_completion: completed / generated (all orders this day)
+        - serviceable_completion: among orders created before business_end_step - order_cutoff_steps,
+          the fraction that were completed.  Uses the same K as order_cutoff_steps so that the
+          serviceable window matches the cutoff window.
+        """
+        business_end_step = self._get_business_end_step()
+        k = self.order_cutoff_steps
+
+        generated_total = len(self.orders)
+        completed_total = len(self.completed_orders)
+        general_completion = completed_total / generated_total if generated_total > 0 else 0.0
+
+        cutoff_step = business_end_step - k  # orders created before this step are "serviceable"
+        serviceable_generated = sum(
+            1 for o in self.orders.values() if o['creation_time'] < cutoff_step
+        )
+        serviceable_completed = sum(
+            1 for oid in self.completed_orders if self.orders[oid]['creation_time'] < cutoff_step
+        )
+        if serviceable_generated > 0:
+            serviceable_completion = serviceable_completed / serviceable_generated
+        else:
+            serviceable_completion = 0.0
+
+        return {
+            'generated_total': generated_total,
+            'completed_total': completed_total,
+            'general_completion': general_completion,
+            'serviceable_generated': serviceable_generated,
+            'serviceable_completed': serviceable_completed,
+            'serviceable_completion': serviceable_completion,
+        }
 
     # ------------------ observation encoding ------------------
 
