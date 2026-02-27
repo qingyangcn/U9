@@ -1077,7 +1077,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                  base_placement_method='kmeans',
                  drone_max_capacity=10,
                  operating_hours=(6, 22),
-                 high_load_factor=1.5,
+                 high_load_factor=1.3,
                  distance_reward_weight=1.0,
                  multi_objective_mode: str = "conditioned",
                  fixed_objective_weights=(0.5, 0.3, 0.2),
@@ -1089,7 +1089,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                  num_bases: Optional[int] = None,
                  top_k_merchants: int = 100,
                  reward_output_mode: str = "zero",
-                 enable_random_events: bool = True,  # 可选：评估时建议关掉随机事件
+                 enable_random_events: bool = False,  # 可选：评估时建议关掉随机事件
                  debug_state_warnings: bool = False,  # Task B: control state consistency warning output
                  delivery_sla_steps: int = 6,  # READY-based delivery SLA in steps (increased for better pickup time)
                  timeout_factor: float = 4.0,  # Multiplier for deadline calculation (increased for better pickup time)
@@ -4120,7 +4120,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         print(f"  完成订单: {self.daily_stats['orders_completed']}")
         print(f"  完成率: {self.daily_stats['orders_completed'] / self.daily_stats['orders_generated']:.2%}")
         print(f"  取消订单: {self.daily_stats['orders_cancelled']}")
-        print(f"  准时交付: {self.daily_stats['on_time_deliveries']}")
+        #print(f"  准时交付: {self.daily_stats['on_time_deliveries']}")
 
         # Report legacy blocked count if any
         if self.legacy_blocked_count > 0:
@@ -4725,6 +4725,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'rule_id': rule_id,
             'success': False,
             'failure_reason': None,
+            'order_id': None,
         }
 
         if drone_id < 0 or drone_id >= self.num_drones:
@@ -4745,6 +4746,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         if order_id is None or order_id not in self.orders:
             self.last_decision_info['failure_reason'] = 'no_order_selected'
             return False
+
+        # Record selected order_id
+        self.last_decision_info['order_id'] = order_id
 
         order = self.orders[order_id]
 
@@ -4826,3 +4830,26 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             self.last_decision_info['failure_reason'] = None  # Success, no failure
 
         return state_changed
+
+    def apply_rule_to_drone_with_info(self, drone_id: int, rule_id: int) -> Tuple[bool, Dict]:
+        """
+        Apply a rule to a specific drone, returning both success flag and detailed info.
+
+        This is a convenience wrapper around apply_rule_to_drone that also returns
+        the decision info dict, avoiding the need to separately read last_decision_info.
+
+        Args:
+            drone_id: The drone to apply the rule to
+            rule_id: The rule ID (0-4) to apply
+
+        Returns:
+            Tuple of (success: bool, info: dict) where info contains:
+                - drone_id: int
+                - rule_id: int
+                - success: bool
+                - failure_reason: str or None (None on success)
+                - order_id: int or None (selected order id, if any)
+        """
+        success = self.apply_rule_to_drone(drone_id, rule_id)
+        info = dict(self.last_decision_info)
+        return success, info
