@@ -1298,6 +1298,14 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
         self.weather_history = []
         self.pareto_history = []
         self.weather = WeatherType.SUNNY
+        
+        # Decision tracking for decentralized execution
+        self.last_decision_info = {
+            'drone_id': -1,
+            'rule_id': -1,
+            'success': False,
+            'failure_reason': None,
+        }
         self.weather_details = {}
 
         # 营业后履约
@@ -1722,6 +1730,9 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
         obs = self._get_observation()
         info = self._get_info()
+        
+        # Store last observation for decentralized executor
+        self.last_obs = obs
 
         print(f"=== 开始 ===")
         print(f"营业时间: {self.time_system.start_hour}:00 - {self.time_system.end_hour}:00")
@@ -1847,6 +1858,10 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'daily_stats': self.daily_stats.copy(),
             'r_vec': self.episode_r_vec.copy(),  # <- 新增：整集向量回报
         }
+        
+        # Store last observation for decentralized executor
+        self.last_obs = obs
+        
         return obs, scalar_reward, terminated, truncated, info
 
     # ------------------ reset helpers ------------------
@@ -4431,7 +4446,12 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
             'legacy_fallback_enabled': self.enable_legacy_fallback,
             # Add diagnostics statistics (consistent with strict counting)
             'drones_at_decision_points': self._last_decision_points_count,
-            'actions_applied_this_step': self.action_applied_count
+            'actions_applied_this_step': self.action_applied_count,
+            # Add last decision info for decentralized execution tracking
+            'last_decision_drone_id': self.last_decision_info['drone_id'],
+            'last_decision_rule_id': self.last_decision_info['rule_id'],
+            'last_decision_success': self.last_decision_info['success'],
+            'last_decision_failure_reason': self.last_decision_info['failure_reason'],
         }
 
         if self.daily_stats['orders_completed'] > 0:
@@ -4695,14 +4715,27 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
         Returns:
             True if the rule was successfully applied and changed state, False otherwise
+            
+        Side effects:
+            Updates self.last_decision_info with decision details and failure reason
         """
+        # Reset decision info
+        self.last_decision_info = {
+            'drone_id': drone_id,
+            'rule_id': rule_id,
+            'success': False,
+            'failure_reason': None,
+        }
+        
         if drone_id < 0 or drone_id >= self.num_drones:
+            self.last_decision_info['failure_reason'] = 'invalid_drone_id'
             return False
 
         drone = self.drones[drone_id]
 
         # Check if drone is at decision point
         if not self._is_at_decision_point(drone_id):
+            self.last_decision_info['failure_reason'] = 'not_at_decision_point'
             return False
 
         # Apply rule to select an order
@@ -4710,6 +4743,7 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
 
         # If no order selected, rule didn't apply
         if order_id is None or order_id not in self.orders:
+            self.last_decision_info['failure_reason'] = 'no_order_selected'
             return False
 
         order = self.orders[order_id]
@@ -4737,6 +4771,16 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                             new_assigned_drone == drone_id and
                             new_load > prev_load):
                         state_changed = True
+                    else:
+                        self.last_decision_info['failure_reason'] = 'assignment_rejected'
+                else:
+                    self.last_decision_info['failure_reason'] = 'drone_at_capacity'
+            else:
+                self.last_decision_info['failure_reason'] = 'order_already_assigned'
+        else:
+            # Order not READY - might be ASSIGNED or PICKED_UP by this drone
+            if order.get('assigned_drone', -1) != drone_id:
+                self.last_decision_info['failure_reason'] = 'order_not_ready_or_not_mine'
 
         # Set serving_order_id and target
         drone['serving_order_id'] = order_id
@@ -4775,5 +4819,10 @@ class ThreeObjectiveDroneDeliveryEnv(gym.Env):
                             prev_status != new_status or
                             prev_serving_order_id != order_id):
                         state_changed = True
-
+        
+        # Update decision info
+        self.last_decision_info['success'] = state_changed
+        if state_changed and self.last_decision_info['failure_reason'] is None:
+            self.last_decision_info['failure_reason'] = None  # Success, no failure
+        
         return state_changed
