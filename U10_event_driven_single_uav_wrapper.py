@@ -81,9 +81,15 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
             # For now, keep original observation space
             pass
         else:
-            # Add current_drone_id to observation
-            # Keep original observation space, will add field in observation dict
-            pass
+            # Add current_drone_id to observation space
+            # Get original observation space
+            original_spaces = dict(self.env.observation_space.spaces)
+            # Add current_drone_id field
+            original_spaces['current_drone_id'] = spaces.Box(
+                low=-1, high=env.unwrapped.num_drones, shape=(1,), dtype=np.int32
+            )
+            # Override observation space with extended version
+            self.observation_space = spaces.Dict(original_spaces)
 
     def reset(self, **kwargs) -> Tuple[Dict, Dict]:
         """
@@ -244,7 +250,9 @@ class EventDrivenSingleUAVWrapper(gym.Wrapper):
                     self.current_drone_id = self.decision_queue.popleft()
                 break
 
-        return self.last_obs, total_reward, terminated, truncated, self.last_info
+        # Return observation via _get_current_observation to ensure consistency
+        obs_out, info_out = self._get_current_observation()
+        return obs_out, total_reward, terminated, truncated, info_out
 
     def _get_current_observation(self) -> Tuple[Dict, Dict]:
         """
